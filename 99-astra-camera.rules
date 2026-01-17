@@ -1,0 +1,9 @@
+# Orbbec Astra Camera USB Rules
+# Place this file in /etc/udev/rules.d/
+
+# Orbbec 3D Camera
+SUBSYSTEM=="usb", ATTR{idVendor}=="2bc5", ATTR{idProduct}=="050f", MODE="0666", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="2bc5", ATTR{idProduct}=="060f", MODE="0666", GROUP="plugdev"
+
+# All Orbbec devices
+SUBSYSTEM=="usb", ATTR{idVendor}=="2bc5", MODE="0666", GROUP="plugdev"

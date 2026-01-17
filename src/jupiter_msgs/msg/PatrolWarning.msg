@@ -1,0 +1,4 @@
+float32 speed
+string function_name
+float32 response_distance
+int32 laser_angle

@@ -1,0 +1,123 @@
+ekf_filter_node:
+  ros__parameters:
+    frequency: 20.0
+    sensor_timeout: 0.1
+    two_d_mode: true
+    publish_tf: true
+    odom_frame: odom
+    base_link_frame: base_link
+    
+    # The frame_id values for the IMU, odometry, and sensor sources used by the node
+    #x     , y     , z,
+    #roll  , pitch , yaw,
+    #vx    , vy    , vz,
+    #vroll , vpitch, vyaw,
+    #ax    , ay    , az
+
+    odom0: /odom_raw
+    odom0_config: [false, false, false,
+                  false, false, false,
+                  true, true, false,
+                  false, false, true,
+                  false, false, false]
+
+    odom0_differential: true
+    odom0_relative: false
+    odom0_queue_size: 10
+
+    # IMU 데이터 활용 - Raw IMU 직접 사용 (TF 충돌 방지)
+    # imu_filter_madgwick 제거로 raw IMU를 직접 EKF에서 처리
+    imu0: /jupiter/imu_corrected  # imu_calib_node가 교정한 IMU (raw)
+    # NOTE: If you find that your robot has x drift,
+    # the most likely candidate is the x'' (acceleration)
+    # Just set it to false! (It's the first entry on the last row)
+    # yahboomcar_ws 방식처럼 방향(yaw) 및 각속도(vyaw)를 사용
+    # 하지만 선형 가속도는 사용하지 않음
+    imu0_config: [false, false, false,
+                 false, false, true,   # yaw 사용
+                 false, false, false,
+                 false, false, true,   # vyaw (각속도) 사용
+                 false, false, false]
+
+    imu0_differential: true
+    imu0_relative: false
+    imu0_queue_size: 10
+    imu0_remove_gravitational_acceleration: true
+    
+    # Raw IMU를 위한 노이즈 파라미터 조정
+    imu0_pose_rejection_threshold: 15.0    # 10.0 → 15.0 (raw는 더 noisy)
+    imu0_twist_rejection_threshold: 8.0    # 5.0 → 8.0 (raw 각속도 노이즈 허용)
+    imu0_nodelay: false
+    imu0_pose_use_child_frame: false
+    
+    # Parameter limits adjustment - wider range for raw IMU
+    imu0_linear_acceleration_limits: [-3.0, 3.0]    # 더 보수적 범위
+    imu0_angular_velocity_limits: [-3.0, 3.0]
+    
+    # EKF control parameters
+    reset_on_time_jump: true               # Reset on time jump
+    smooth_lagged_data: true               # Smooth handling of lagged data
+    history_length_in_seconds: 0.5         # Increased history length for better stability
+    
+    # Odometry noise parameters
+    odom0_pose_rejection_threshold: 10.0   # Increased Mahalanobis distance threshold for position measurements
+    odom0_twist_rejection_threshold: 5.0   # Increased Mahalanobis distance threshold for velocity measurements
+    
+    # Process noise covariance matrix - reduced values for more stability
+    # Reduced position and velocity noise values to make the filter more resistant to outliers
+    process_noise_covariance: [0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                              0.0, 0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                              0.0, 0.0, 0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                              0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                              0.0, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                              0.0, 0.0, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                              0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                              0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                              0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                              0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.005, 0.0, 0.0, 0.0, 0.0, 0.0,
+                              0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.005, 0.0, 0.0, 0.0, 0.0,
+                              0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0,
+                              0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.005, 0.0, 0.0,
+                              0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.005, 0.0,
+                              0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.005]
+    
+    # GPS configuration
+    navsat0: /ublox_gps/fix
+    navsat0_config: [true, true, false,
+                    false, false, false,
+                    false, false, false,
+                    false, false, false,
+                    false, false, false]
+    
+    navsat0_differential: false
+    navsat0_relative: false
+    navsat0_queue_size: 10
+    
+    use_sim_time: false
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: base_link  # Use the base_link frame (matches actual TF tree)
+    world_frame: odom           # Odometry-based localization
+    
+    transform_time_offset: 0.0
+    transform_timeout: 0.0
+    
+    use_control: false
+    
+    # Advanced parameters
+    debug: false
+    debug_out_file: /tmp/ekf_debug.txt
+    
+    # GPS transformation parameters
+    navsat_transform_node:
+        ros__parameters:
+            frequency: 10.0
+            delay: 3.0
+            magnetic_declination_radians: 0.0
+            yaw_offset: 0.0
+            zero_altitude: true
+            broadcast_cartesian_transform: true
+            publish_filtered_gps: true
+            use_odometry_yaw: true
+            wait_for_datum: false
+

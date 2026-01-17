@@ -1,0 +1,9 @@
+/**:
+  ros__parameters:
+    Kp: 0.1           # Proportional gain (0.0 ~ 10.0)
+    Ki: 0.0           # Integral gain (0.0 ~ 10.0)
+    Kd: 1.0           # Derivative gain (0.0 ~ 10.0)
+    linear_max: 0.4   # Maximum linear speed (0.0 ~ 0.45)
+    angular_max: 2.0  # Maximum angular speed (0.0 ~ 2.0)
+    linear_min: 0.0   # Minimum linear speed (0.0 ~ 0.45)
+    angular_min: 0.0  # Minimum angular speed (0.0 ~ 2.0)

@@ -1,0 +1,6 @@
+#request
+string command
+---
+#response
+bool result
+float32[] angles

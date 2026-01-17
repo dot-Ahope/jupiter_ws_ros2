@@ -1,0 +1,47 @@
+/**:
+  ros__parameters:
+    device: /dev/rtk_gps
+    frame_id: gps_link
+    uart1:
+      baudrate: 38400
+    config_on_startup: true
+    rate: 5.0
+    nav_rate: 5
+    debug: 2
+    dynamic_model: portable
+    tmode: 
+      mode: 0
+      lla: 
+        lon: 0.0
+        lat: 0.0
+        alt: 0
+        acc: 0.0
+      fixed_pos_acc: 0.0
+      svin:
+        min_dur: 0
+        acc_limit: 0.0
+    enable_ppp: false
+    inf:
+      all: true
+    nmea:
+      set: false
+      consideration_mask: 15
+      high_precision: true
+    publish:
+      all: true
+      nav:
+        all: true
+        posllh: true
+        posecef: true
+        velned: true
+        status: true
+        pvt: true
+      rxm:
+        all: true
+        rawx: true
+        sfrbx: true
+      aid:
+        all: true
+      rtcm:
+        all: true
+    raw_data: true

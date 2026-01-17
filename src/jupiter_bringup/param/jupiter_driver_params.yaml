@@ -1,0 +1,14 @@
+/**:
+  ros__parameters:
+    Kp: 0.1           # Proportional gain (0.0 ~ 10.0)
+    Ki: 0.0           # Integral gain (0.0 ~ 10.0)
+    Kd: 1.0           # Derivative gain (0.0 ~ 10.0)
+    linear_max: 0.45   # Maximum linear speed (0.0 ~ 0.45) - Increased to max
+    angular_max: 2.0  # Maximum angular speed (0.0 ~ 2.0)
+    linear_min: 0.0   # Minimum linear speed (0.0 ~ 0.45)
+    angular_min: 0.0  # Minimum angular speed (0.0 ~ 2.0)
+
+    # IMU Inversion Parameters
+    imu_invert_x: false
+    imu_invert_y: false
+    imu_invert_z: true  # IMU Z축 (Yaw) 반전 - 실제 회전과 RViz 회전 방향 불일치 해결

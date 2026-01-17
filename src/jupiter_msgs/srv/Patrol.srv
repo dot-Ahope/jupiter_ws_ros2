@@ -1,0 +1,7 @@
+#request
+string  command
+float32 line_scaling
+float32 rotation_scaling
+---
+#response
+bool result

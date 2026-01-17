@@ -1,0 +1,14 @@
+<launch>
+    <!--    启动相机设备服务-->
+    <node pkg="jupiter_bringup" type="DeviceSrv.py" name="DeviceSrv" output="screen"/>
+    <!--    启动Jupiter底层节点-->
+    <node pkg="jupiter_bringup" type="jupiter_driver.py" name="jupiter_node" required="true" output="screen">
+        <param name="imu" value="/jupiter/imu"/>
+        <param name="vel" value="/jupiter/get_vel"/>
+        <param name="kp" value="1.0"/>
+        <param name="ki" value="0.0"/>
+        <param name="kd" value="4.0"/>
+    </node>
+    <!--    启动手柄控制节点-->
+    <include file="$(find jupiter_ctrl)/launch/jupiter_joy.launch"/>
+</launch>

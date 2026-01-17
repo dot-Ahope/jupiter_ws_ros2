@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>jupiter_ctrl</name>
+  <version>0.0.0</version>
+  <description>The jupiter_ctrl package for ROS 2</description>
+  <maintainer email="yahboom@todo.todo">yahboom</maintainer>
+  <license>TODO</license>
+
+  <build_depend>ament_python</build_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  
+  <depend>jupiter_msgs</depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

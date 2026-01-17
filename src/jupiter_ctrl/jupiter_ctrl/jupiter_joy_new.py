@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+# encoding: utf-8
+
+# ROS 2 Python 클라이언트 라이브러리 rclpy 임포트
+import rclpy
+from rclpy.node import Node
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.callback_groups import ReentrantCallbackGroup
+
+# 기본 Python 라이브러리
+import os
+import time
+import getpass
+import threading
+from time import sleep
+
+# ROS 2 메시지 및 서비스 타입 임포트
+from sensor_msgs.msg import Joy
+from geometry_msgs.msg import Twist
+from jupiter_msgs.msg import Adjust
+
+
+class JoyTeleop(Node):
+    def __init__(self):
+        # super().__init__을 호출하여 노드 이름을 'jupiter_joy'로 초기화
+        super().__init__('jupiter_joy')
+        
+        # --- 상태 변수 ---
+        self.user_name = getpass.getuser()
+        self.Joy_active = True  # 자동으로 활성화
+        self.linear_Gear = 1.0
+        self.angular_Gear = 1.0
+        self.deadzone = 0.01  # 10% 데드존(10% 미만의 입력값 무시)
+        self.expo = 2.0  # 지수 커브 factor(1.0 = 선형, 2.0 = 제곱, 3.0 = 세제곱 등)
+        
+        # 서비스 호출과 다른 콜백이 겹치지 않도록 ReentrantCallbackGroup 사용
+        self.callback_group = ReentrantCallbackGroup()
+
+        # --- 파라미터 선언 ---
+        self.declare_parameter('linear_speed_limit', 0.1)  # 최대 선속도를 0.15 m/s로 제한
+        self.declare_parameter('angular_speed_limit', 0.45)  # 최대 각속도를 1.0 rad/s로 제한
+        self.linear_speed_limit = self.get_parameter('linear_speed_limit').get_parameter_value().double_value
+        self.angular_speed_limit = self.get_parameter('angular_speed_limit').get_parameter_value().double_value
+        self.get_logger().info(f"Speed limits: linear={self.linear_speed_limit}, angular={self.angular_speed_limit}")
+
+        # --- 퍼블리셔 생성 ---
+        self.cmdVelPublisher = self.create_publisher(Twist, '/cmd_vel', 10)
+        self.pub_Adjust = self.create_publisher(Adjust, "/Adjust", 10)
+
+        # --- 서브스크라이버 생성 ---
+        self.sub_Joy = self.create_subscription(
+            Joy,
+            '/joy',
+            self.buttonCallback,
+            10,
+            callback_group=self.callback_group)
+        
+        self.get_logger().info("Joy Teleop Node has been started.")
+
+    def buttonCallback(self, joy_data):
+        '''
+        조이스틱 입력 처리
+        '''
+        if not isinstance(joy_data, Joy): 
+            return
+        
+        # 디버그 로그 
+        self.get_logger().info(f"Joy received - axes[1]={joy_data.axes[1]:.3f}, axes[2]={joy_data.axes[2]:.3f}")
+        
+        # 사용자 환경에 따라 적절한 처리
+        if self.user_name == "pi": 
+            self.user_pi(joy_data)
+        else: 
+            self.user_jetson(joy_data)
+
+    def apply_deadzone_and_expo(self, value):
+        '''
+        데드존과 지수 커브를 적용하여 조이스틱 값을 조정
+        '''
+        # 데드존 적용
+        if abs(value) < self.deadzone:
+            return 0.0
+        
+        # 데드존을 벗어난 값을 0-1 범위로 재조정
+        sign = 1.0 if value > 0 else -1.0
+        value = abs(value)
+        normalized = (value - self.deadzone) / (1 - self.deadzone)
+        
+        # 지수 커브 적용
+        adjusted = normalized ** self.expo
+        
+        return sign * adjusted
+
+    def user_pi(self, joy_data):
+        '''
+        PI 환경용 - axes[3]이 회전
+        '''
+        # 데드존과 지수 커브 적용
+        linear_input = self.apply_deadzone_and_expo(joy_data.axes[1])
+        angular_input = self.apply_deadzone_and_expo(joy_data.axes[3])
+        
+        linear_speed = linear_input * self.linear_speed_limit * self.linear_Gear
+        angular_speed = angular_input * self.angular_speed_limit * self.angular_Gear
+        
+        self.publish_cmd_vel(linear_speed, angular_speed)
+
+    def user_jetson(self, joy_data):
+        '''
+        Jetson 환경용 - axes[2]가 회전
+        '''
+        # 데드존과 지수 커브 적용
+        linear_input = self.apply_deadzone_and_expo(joy_data.axes[1])
+        angular_input = self.apply_deadzone_and_expo(joy_data.axes[2])
+        
+        linear_speed = linear_input * self.linear_speed_limit * self.linear_Gear
+        angular_speed = angular_input * self.angular_speed_limit * self.angular_Gear
+        
+        self.publish_cmd_vel(linear_speed, angular_speed)
+
+    def publish_cmd_vel(self, linear_speed, angular_speed):
+        '''
+        cmd_vel 메시지 발행
+        '''
+        # 속도 제한 적용
+        if linear_speed > self.linear_speed_limit: 
+            linear_speed = self.linear_speed_limit
+        elif linear_speed < -self.linear_speed_limit: 
+            linear_speed = -self.linear_speed_limit
+
+        if angular_speed > self.angular_speed_limit:
+            angular_speed = self.angular_speed_limit
+        elif angular_speed < -self.angular_speed_limit:
+            angular_speed = -self.angular_speed_limit
+
+        # Twist 메시지 생성 및 발행
+        twist = Twist()
+        twist.linear.x = float(linear_speed)
+        twist.angular.z = float(angular_speed)
+        self.cmdVelPublisher.publish(twist)
+        
+        # 디버그 로그
+        self.get_logger().info(f"Published: linear={linear_speed:.3f}, angular={angular_speed:.3f}")
+
+
+def main(args=None):
+    # ROS 2 초기화
+    rclpy.init(args=args)
+    
+    # 노드 생성
+    joy_teleop = JoyTeleop()
+    
+    # MultiThreadedExecutor 생성
+    executor = MultiThreadedExecutor()
+    executor.add_node(joy_teleop)
+    
+    try:
+        # 노드 실행
+        executor.spin()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        # 종료 처리
+        executor.shutdown()
+        joy_teleop.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,51 @@
+Transbot 조이스틱 제어 데이터 흐름
+
+1. 조이스틱 입력 → /joy 토픽
+------------------------------
+- joy_node가 조이스틱 하드웨어의 입력을 읽어 /joy 토픽으로 발행
+- sensor_msgs/Joy 메시지 형식 사용
+- axes[]: 아날로그 스틱의 값 (-1.0 ~ 1.0)
+  * axes[0]: 좌우 이동
+  * axes[1]: 전후 이동
+- buttons[]: 버튼의 상태 (0 또는 1)
+
+2. /joy 토픽 → /cmd_vel 토픽 (transbot_joy 노드)
+---------------------------------------------
+- transbot_joy.py에서 Joy 메시지를 Twist 메시지로 변환
+- 변환 과정:
+  * linear.x = axes[1] * scale_linear    (전진/후진 속도)
+  * angular.z = axes[0] * scale_angular  (회전 속도)
+- geometry_msgs/Twist 메시지 형식:
+  * linear: 선속도 (m/s)
+  * angular: 각속도 (rad/s)
+
+3. /cmd_vel 토픽 → 모터 제어 (transbot_driver 노드)
+----------------------------------------------
+- transbot_driver.py에서 Twist 메시지를 받아 모터 명령으로 변환
+- 변환 공식:
+  * base_speed = linear.x * (100.0 / 0.2)  // m/s를 모터 속도 백분율로 변환
+  * turn_speed = angular.z * (100.0 / 0.5)  // rad/s를 모터 속도 백분율로 변환
+  
+  * left_motor = base_speed - turn_speed   // 좌측 모터 속도
+  * right_motor = base_speed + turn_speed  // 우측 모터 속도
+
+- 최종 모터 제어:
+  * 속도 범위: -100 ~ 100 사이로 제한
+  * self.bot.set_motor(1, left_speed)   // 좌측 모터 제어
+  * self.bot.set_motor(2, right_speed)  // 우측 모터 제어
+
+예시:
+1. 조이스틱을 전방으로 최대한 밀었을 때:
+   - Joy: axes[1] = 1.0
+   - Twist: linear.x = scale_linear (예: 0.2 m/s)
+   - 모터: left = right = 100% (최대 전진)
+
+2. 조이스틱을 우측으로 최대한 밀었을 때:
+   - Joy: axes[0] = 1.0
+   - Twist: angular.z = scale_angular (예: 0.5 rad/s)
+   - 모터: left = 100%, right = -100% (제자리 우회전)
+
+주의사항:
+- 모터의 최대 속도는 안전을 위해 제한될 수 있음
+- PID 제어를 통해 부드러운 모션 제어
+- 하드웨어 보호를 위한 급격한 속도 변화 방지 로직 포함

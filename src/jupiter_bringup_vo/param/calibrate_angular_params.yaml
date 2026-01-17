@@ -1,0 +1,7 @@
+/**:
+  ros__parameters:
+    test_angle: 360.0  # Test angle in degrees (0.0 ~ 360.0)
+    speed: 0.3        # Angular speed in radians per second (-2.0 ~ 2.0)
+    tolerance: 1.0    # Error tolerance in degrees (1.0 ~ 10.0)
+    odom_angular_scale_correction: 0.75  # Angular correction factor (0.0 ~ 3.0)
+    start_test: false  # Flag to start the test

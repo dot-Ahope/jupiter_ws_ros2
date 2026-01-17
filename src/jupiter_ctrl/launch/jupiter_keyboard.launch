@@ -1,0 +1,6 @@
+<launch>
+    <node name="jupiter_keyboard" pkg="jupiter_ctrl" type="jupiter_keyboard.py" output="screen">
+        <param name="linear_speed_limit" type="double" value="0.45"/>
+        <param name="angular_speed_limit" type="double" value="2.0"/>
+    </node>
+</launch>

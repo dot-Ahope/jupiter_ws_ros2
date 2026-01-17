@@ -1,0 +1,10 @@
+calibration_info: Measured with robot stationary. Apply before EKF.
+gyro_bias:
+  x: -0.005118744176929602
+  y: -0.0032535068402035623
+  z: -0.008100459290924513
+gyro_std:
+  x: 0.001819685110012933
+  y: 0.0015568319614379085
+  z: 0.0011166017803657653
+sample_count: 200

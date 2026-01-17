@@ -1,0 +1,14 @@
+/**:
+  ros__parameters:
+    # 국립국토지리원 CORS 설정
+    host: "gnssdata.or.kr"
+    port: 2101
+    mountpoint: "VRS_RTCM3"  # 실제 마운트포인트로 변경 필요
+    username: "your_ngii_username"  # NGII 계정 사용자명
+    password: "your_ngii_password"  # NGII 계정 비밀번호
+
+    # RTCM 브릿지 설정
+    rtcm_topic: "/rtcm"
+    gps_serial_port: "/dev/rtk_gps"
+    gps_baudrate: 38400
+    rtcm_message_package: "mavros_msgs"
