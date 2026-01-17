@@ -1,0 +1,70 @@
+slam_toolbox:
+  ros__parameters:
+    # Plugin params
+    solver_plugin: solver_plugins::CeresSolver
+    ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
+    ceres_preconditioner: SCHUR_JACOBI
+    ceres_trust_strategy: LEVENBERG_MARQUARDT
+    ceres_dogleg_type: TRADITIONAL_DOGLEG
+    ceres_loss_function: HuberLoss  # 변경: 이상치에 더 강인한 Huber Loss 사용
+
+    # ROS Parameters
+    odom_frame: odom
+    map_frame: map
+    base_frame: base_footprint  # EKF가 odom->base_footprint 발행하므로 일치
+    scan_topic: /scan
+    mode: mapping #localization
+
+    # 맵 경로를 명확하게 지정하고 map_start_at_dock을 false로 설정
+    map_file_name: ""
+    map_start_pose: [0.0, 0.0, 0.0]
+    map_start_at_dock: false
+
+    debug_logging: false
+    throttle_scans: 1              # 모든 스캔 사용 (5→1) - 정확도 향상
+    transform_publish_period: 0.02 # TF 발행 주기 단축 (0.1→0.02, 50Hz) - 반응성 향상
+    map_update_interval: 1.0       # 맵 업데이트 주기 단축 (5.0→1.0) - 실시간 반영
+    resolution: 0.05               # 맵 해상도 (5cm)
+    max_laser_range: 12.0          # 최대 레이저 거리 확대 (2.5→12.0) - 넓은 영역 매핑
+    minimum_time_interval: 0.1     # 업데이트 최소 시간 간격 단축 (0.5→0.1)
+    transform_timeout: 1.0         # 타임아웃 증가 (0.2→1.0) - transform 대기 시간 확보
+    tf_buffer_duration: 30.
+    stack_size_to_use: 40000000    # 대형 맵 직렬화를 위한 스택 크기
+    enable_interactive_mode: false # 인터랙티브 모드 비활성화 - 성능 향상
+
+    # General Parameters
+    use_scan_matching: true
+    use_scan_barycenter: true
+    minimum_travel_distance: 0.05  # 최소 이동 거리 (0.15→0.05, 5cm) - 미세 이동 감지
+    minimum_travel_heading: 0.05   # 최소 회전 각도 (0.15→0.05, 약 2.9도) - 미세 회전 감지
+    scan_buffer_size: 10           # 버퍼 크기 증가 (5→10) - 더 많은 스캔 저장
+    scan_buffer_maximum_scan_distance: 3.5  # 최대 스캔 거리 약간 증가
+    link_match_minimum_response_fine: 0.15  # 더 강한 매치 응답 필요 (0.1→0.15)
+    link_scan_maximum_distance: 2.0         # 매칭 거리 증가 (1.5→2.0)
+    loop_search_maximum_distance: 4.0       # 루프 클로저 탐색 거리 증가 (3.0→4.0)
+    do_loop_closing: true
+    loop_match_minimum_chain_size: 8        # 루프 클로저를 위한 최소 체인 크기 감소 (10→8)
+    loop_match_maximum_variance_coarse: 2.5 # 더 엄격한 분산 제한 (3.0→2.5)
+    loop_match_minimum_response_coarse: 0.4 # 더 엄격한 응답 요구 (0.35→0.4)
+    loop_match_minimum_response_fine: 0.5   # 더 엄격한 응답 요구 (0.45→0.5)
+
+    # Correlation Parameters - Correlation Parameters
+    correlation_search_space_dimension: 0.6 # 검색 공간 확장 (0.5→0.6)
+    correlation_search_space_resolution: 0.01
+    correlation_search_space_smear_deviation: 0.1
+
+    # Correlation Parameters - Loop Closure Parameters
+    loop_search_space_dimension: 9.0        # 검색 공간 확장 (8.0→9.0)
+    loop_search_space_resolution: 0.04      # 해상도 약간 증가 (0.05→0.04)
+    loop_search_space_smear_deviation: 0.03
+
+    # Scan Matcher Parameters
+    distance_variance_penalty: 0.6          # 거리 분산 페널티 증가 (0.5→0.6)
+    angle_variance_penalty: 1.0    
+
+    fine_search_angle_offset: 0.00349     
+    coarse_search_angle_offset: 0.349   
+    coarse_angle_resolution: 0.0349        
+    minimum_angle_penalty: 0.95            # 각도 페널티 증가 (0.9→0.95)
+    minimum_distance_penalty: 0.6          # 거리 페널티 증가 (0.5→0.6)
+    use_response_expansion: true

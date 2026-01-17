@@ -1,0 +1,81 @@
+ekf_filter_node:
+  ros__parameters:
+    # 기본 설정
+    frequency: 20.0                # 필터 업데이트 주파수 (Hz)
+    sensor_timeout: 0.1            # 센서 데이터가 지정된 시간보다 오래되면 사용하지 않음 (seconds)
+    two_d_mode: true               # 2D 모드 활성화 (z, roll, pitch를 0으로 고정)
+    publish_tf: true               # TF 변환 발행 활성화
+    publish_acceleration: false    # 가속도 발행
+    
+    # 입력 및 출력 프레임 설정
+    map_frame: map                 # 지도 프레임
+    odom_frame: odom               # 오도메트리 프레임
+    base_link_frame: base_link     # 로봇 베이스 프레임 (TF 트리에 일치하도록)
+    world_frame: odom              # 상태 추정치를 발행할 프레임
+
+    # 상태 추정 변수 설정 (15개 상태 변수)
+    # x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az
+    
+    # 오도메트리 데이터 활용 설정 - encoder 기반 속도 정보만 활용
+    # transbot_base 노드에서 발행하는 /odom_raw 토픽은 엔코더로 측정한 선속도와 각속도를 포함
+    # 이 데이터는 위치 정확도가 낮기 때문에 속도 정보만 활용함
+    odom0_config: [false, false, false,  # x, y, z 위치 - 사용하지 않음
+                   false, false, false,  # roll, pitch, yaw 방향 - 사용하지 않음
+                   true, true, false,    # vx, vy, vz 선속도 - x, y 선속도만 사용
+                   false, false, true,   # vroll, vpitch, vyaw 각속도 - yaw 각속도만 사용
+                   false, false, false]  # ax, ay, az 선가속도 - 사용하지 않음
+
+    # IMU 데이터 활용 설정 - IMU 보정 및 필터링 이후 방향과 가속도 정보 활용
+    # /imu/data 토픽은 imu_calib -> imu_filter_madgwick 파이프라인을 통해 처리된 데이터
+    # 1. imu_calib: 원시 IMU 데이터를 보정하여 bias와 scale 오차 제거
+    # 2. imu_filter_madgwick: 가속도계와 자이로스코프 데이터를 융합하여 정확한 방향 추정
+    imu0_config: [false, false, false,   # x, y, z 위치 - 사용하지 않음
+                  false, false, true,    # roll, pitch, yaw 방향 - yaw만 사용 (2D 모드)
+                  false, false, false,   # vx, vy, vz 선속도 - 사용하지 않음
+                  false, false, true,    # vroll, vpitch, vyaw 각속도 - yaw 각속도만 사용
+                  true, true, false]     # ax, ay, az 선가속도 - x, y 가속도만 사용
+
+    # 공분산 값 조절
+    process_noise_covariance: [0.05, 0.0,   0.0,   0.0,   0.0,   0.0,   0.0,    0.0,    0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
+                               0.0,   0.05,  0.0,   0.0,   0.0,   0.0,   0.0,    0.0,    0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
+                               0.0,   0.0,   0.06,  0.0,   0.0,   0.0,   0.0,    0.0,    0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
+                               0.0,   0.0,   0.0,   0.03,  0.0,   0.0,   0.0,    0.0,    0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
+                               0.0,   0.0,   0.0,   0.0,   0.03,  0.0,   0.0,    0.0,    0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
+                               0.0,   0.0,   0.0,   0.0,   0.0,   0.06,  0.0,    0.0,    0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
+                               0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.025,  0.0,    0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
+                               0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,    0.025,  0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
+                               0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,    0.0,    0.04,  0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
+                               0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,    0.0,    0.0,   0.01,  0.0,   0.0,   0.0,   0.0,   0.0,
+                               0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,    0.0,    0.0,   0.0,   0.01,  0.0,   0.0,   0.0,   0.0,
+                               0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,    0.0,    0.0,   0.0,   0.0,   0.02,  0.0,   0.0,   0.0,
+                               0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,    0.0,    0.0,   0.0,   0.0,   0.0,   0.01,  0.0,   0.0,
+                               0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,    0.0,    0.0,   0.0,   0.0,   0.0,   0.0,   0.01,  0.0,
+                               0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,    0.0,    0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.015]
+
+    # 오도메트리 설정 - /odom_raw 토픽을 구독하여 로봇의 속도 정보를 얻음
+    # transbot_base 노드는 모터 엔코더를 이용하여 로봇의 선속도와 각속도를 계산하고 발행
+    odom0: /odom_raw
+    odom0_differential: false      # 순수 속도 데이터를 사용하므로 미분 값 사용 안 함
+    odom0_relative: false          # 절대 좌표계 기준 속도를 사용
+    odom0_queue_size: 10           # 최대 10개의 메시지 버퍼링
+    odom0_pose_rejection_threshold: 5.0  # 이전 측정값과 크게 차이나는 위치 데이터 거부
+    odom0_twist_rejection_threshold: 1.0  # 이전 측정값과 크게 차이나는 속도 데이터 거부
+    
+    # IMU 설정 - /imu/data 토픽을 구독하여 방향과 가속도 정보를 얻음
+    # 이 토픽은 imu_calib 노드에서 보정되고 imu_filter_madgwick 노드에서 필터링된 IMU 데이터
+    # 1. 원시 IMU 데이터는 /transbot/imu 토픽으로 발행됨
+    # 2. imu_calib 노드가 이를 구독하여 imu_calib.yaml에 정의된 보정값을 적용
+    # 3. 보정된 데이터는 /imu/data_calibrated 토픽으로 발행됨
+    # 4. imu_filter_madgwick 노드가 보정된 데이터를 필터링하여 /imu/data 토픽으로 발행
+    # 5. 최종적으로 robot_localization의 EKF가 이 데이터를 사용하여 로봇의 위치 추정
+    imu0: /imu/data
+    imu0_differential: false       # 절대 방향 데이터를 사용하므로 미분 값 사용 안 함
+    imu0_relative: true            # IMU 데이터는 상대적인 프레임 기준으로 해석
+    imu0_queue_size: 10            # 최대 10개의 메시지 버퍼링
+    imu0_remove_gravitational_acceleration: true  # 중력 가속도 성분 제거
+    imu0_pose_rejection_threshold: 0.8   # 이전 측정값과 크게 차이나는 방향 데이터 거부
+    imu0_twist_rejection_threshold: 0.8   # 이전 측정값과 크게 차이나는 각속도 데이터 거부
+    imu0_linear_acceleration_rejection_threshold: 0.8  # 이전 측정값과 크게 차이나는 가속도 데이터 거부
+
+    # 초기 상태 (x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az)
+    initial_state: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]

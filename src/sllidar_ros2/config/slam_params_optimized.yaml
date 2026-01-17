@@ -1,0 +1,91 @@
+# SLAM 파라미터 최적화 (즉시 적용 버전)
+# 위치 신뢰도 향상을 위한 조정
+
+slam_toolbox:
+  ros__parameters:
+    # Plugin params
+    solver_plugin: solver_plugins::CeresSolver
+    ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
+    ceres_preconditioner: SCHUR_JACOBI
+    ceres_trust_strategy: LEVENBERG_MARQUARDT
+    ceres_dogleg_type: TRADITIONAL_DOGLEG
+    ceres_loss_function: HuberLoss
+
+    # ROS Parameters
+    odom_frame: odom
+    map_frame: map
+    base_frame: base_footprint
+    scan_topic: /scan
+    mode: mapping
+
+    map_file_name: ""
+    map_start_pose: [0.0, 0.0, 0.0]
+    map_start_at_dock: false
+
+    debug_logging: false
+    throttle_scans: 1
+    transform_publish_period: 0.02
+    map_update_interval: 1.0
+    resolution: 0.05
+    max_laser_range: 12.0
+    minimum_time_interval: 0.1
+    transform_timeout: 1.0
+    tf_buffer_duration: 30.
+    stack_size_to_use: 40000000
+    enable_interactive_mode: false
+
+    # General Parameters
+    use_scan_matching: true
+    use_scan_barycenter: true
+    minimum_travel_distance: 0.05
+    minimum_travel_heading: 0.05
+    
+    # ✅ 개선: 스캔 버퍼 증가 (10 → 15)
+    scan_buffer_size: 15  # 더 많은 과거 스캔 참조
+    
+    scan_buffer_maximum_scan_distance: 3.5
+    
+    # ✅ 개선: 스캔 매칭 신뢰도 향상 (0.15 → 0.20)
+    link_match_minimum_response_fine: 0.20  # 품질 낮은 매칭 거부
+    
+    link_scan_maximum_distance: 2.0
+    
+    # ✅ 개선: Loop closure 탐색 범위 확대 (4.0 → 5.0)
+    loop_search_maximum_distance: 5.0  # 넓은 공간 대응
+    
+    do_loop_closing: true
+    loop_match_minimum_chain_size: 8
+    loop_match_maximum_variance_coarse: 2.5
+    
+    # ✅ 개선: Loop closure 민감도 완화 (0.4 → 0.35, 0.5 → 0.45)
+    loop_match_minimum_response_coarse: 0.35  # 성공률 향상
+    loop_match_minimum_response_fine: 0.45    # 성공률 향상
+
+    # Correlation Parameters
+    correlation_search_space_dimension: 0.6
+    correlation_search_space_resolution: 0.01
+    correlation_search_space_smear_deviation: 0.1
+
+    # ✅ 개선: Loop closure 검색 공간 확장 (9.0 → 10.0)
+    loop_search_space_dimension: 10.0  # 더 넓은 탐색
+    
+    loop_search_space_resolution: 0.04
+    loop_search_space_smear_deviation: 0.03
+
+    # Scan Matcher Parameters
+    # ✅ 개선: 거리 페널티 강화 (0.6 → 0.7)
+    distance_variance_penalty: 0.7  # 직선 이동 정확도 향상
+    
+    angle_variance_penalty: 1.0
+
+    fine_search_angle_offset: 0.00349
+    coarse_search_angle_offset: 0.349
+    coarse_angle_resolution: 0.0349
+    
+    # ✅ 개선: 각도 페널티 완화 (0.95 → 0.85)
+    minimum_angle_penalty: 0.85  # 회전 중 안정성 향상
+    
+    # ✅ 개선: 거리 페널티 강화 (0.6 → 0.7)
+    minimum_distance_penalty: 0.7  # 직선 이동 정확도 향상
+    
+    use_response_expansion: true
