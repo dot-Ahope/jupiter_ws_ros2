@@ -1,7 +1,0 @@
-/**:
-  ros__parameters:
-    test_distance: 1.0  # Test distance in meters (0.0 ~ 2.0)
-    speed: 0.2         # Robot speed in meters per second (0.0 ~ 0.45)
-    tolerance: 0.03    # Error tolerance in meters (0.0 ~ 0.1)
-    odom_linear_scale_correction: 1.2  # Linear correction factor (0.0 ~ 3.0)
-    start_test: false  # Flag to start the test

@@ -1,9 +1,43 @@
+# python / general
+__pycache__/
+*.py[cod]
+*.egg
+*.egg-info/
+*.whl
+
+#Virtualenv
+venv/
+.env/
+.venv/
+
+# Editor/IDE
+.vscode
+.idea/
+*.swp
+.DS_Store
+
+# ROS2 specific
 build/
 install/
 log/
+devel/
 *.log
-*.pyc
-__pycache__/
-.vscode/
-.idea/
-*.swp
+COLCON_IGNORE
+
+# Large assets / models /datasets
+*.bag
+*.db
+*.pt
+*.onnx
+/data/
+assets/
+*.db3
+
+# OS
+*.bak
+*.tmp
+
+# etc
+archive/
+summary/
+d455f_nav_debug/

@@ -95,7 +95,11 @@ class JupiterDriver(Node):
         self.declare_parameter('imu_invert_x', False)
         self.declare_parameter('imu_invert_y', False)
         self.declare_parameter('imu_invert_z', False)
-            
+
+        # IMU Enable/Disable Parameter
+        self.declare_parameter('enable_imu', False) #추가된 것
+
+
         # Create publishers
         self.imu_pub = self.create_publisher(
             Imu, 
@@ -180,6 +184,16 @@ class JupiterDriver(Node):
             vy = msg.linear.y  # m/s (for mecanum wheels)
             angular = msg.angular.z  # rad/s
             
+            # Compensation for robot deadband (starts moving at ~2.5 command) #추가된 부분(cmd_vel에 2.4를 더해 움직이기 시작하는 속도를 맞춤. 문제를 따로 찾아야됨)
+            if abs(angular) > 0.01:
+                angular += math.copysign(2.4, angular)
+
+            # Compensation for linear velocity deadband (starts moving at ~2.0 command) #추가된 부분(로버가 1.9 이상에서부터 천천히 움직임.)
+            if abs(vx) > 0.001:
+                vx += math.copysign(1.9, vx)
+            if abs(vy) > 0.001:
+                vy += math.copysign(1.9, vy)
+            
             # Save last command for fake odometry
             self.last_cmd_vel = msg
             self.last_cmd_time = self.get_clock().now()
@@ -213,6 +227,9 @@ class JupiterDriver(Node):
 
     def publish_imu(self):
         """Publish IMU data"""
+        if not self.get_parameter('enable_imu').value:
+            return
+
         try:
             # Get accelerometer and gyroscope data
             ax, ay, az = self.bot.get_accelerometer_data()

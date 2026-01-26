@@ -1,7 +1,0 @@
-image: map.pgm
-mode: trinary
-resolution: 0.05  # 미터당 픽셀 수 (0.05m/pixel = 5cm/pixel)
-origin: [-10.0, -10.0, 0.0]  # 맵 원점 [x, y, yaw]
-negate: 0  # 검정색과 흰색 반전 여부 (0: 반전 없음, 1: 반전)
-occupied_thresh: 0.65  # 점유 임계값 (이 값보다 크면 점유된 것으로 간주)
-free_thresh: 0.25  # 자유 임계값 (이 값보다 작으면 자유롭게 이동할 수 있는 것으로 간주)
