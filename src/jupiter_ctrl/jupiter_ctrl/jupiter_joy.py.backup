@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+# encoding: utf-8
 
 # ROS 2 Python 클라이언트 라이브러리 rclpy 임포트
 import rclpy
@@ -12,295 +12,185 @@ import os
 import time
 import getpass
 import threading
+from time import sleep
 
 # ROS 2 메시지 및 서비스 타입 임포트
 from sensor_msgs.msg import Joy
 from geometry_msgs.msg import Twist
-from transbot_msgs.srv import RobotArm, RGBLight, Buzzer, CamDevice, Headlight
-from transbot_msgs.msg import Adjust, JoyState, PWMServo, Arm
-# ROS 1의 actionlib_msgs/GoalID 대신 ROS 2에서는 unique_identifier_msgs/UUID를 사용
-from unique_identifier_msgs.msg import UUID
+from jupiter_msgs.msg import Adjust
+from std_msgs.msg import Bool
 
 
-# ROS 1의 클래스를 ROS 2의 Node 클래스를 상속받도록 변경
 class JoyTeleop(Node):
     def __init__(self):
-        # super().__init__을 호출하여 노드 이름을 'transbot_joy'로 초기화
-        super().__init__('transbot_joy')
-
-        # --- 상태 변수 (원본과 동일) ---
-        self.active = 0
-        self.current_joint = False
-        self.Buzzer_value = False
-        self.Headlight_value = False
-        self.CameraDevice = "Astra"
-        self.user_name = getpass.getuser()
-        self.Joy_active = True  # 항상 활성화 상태로 시작
-        self.cancel_time = time.time()
-        self.arm_time = time.time()
-        self.RGBLight_value = 0
-        self.PWMServo_X = 90
-        self.PWMServo_Y = 90
+        # super().__init__을 호출하여 노드 이름을 'jupiter_joy'로 초기화
+        super().__init__('jupiter_joy')
         
-        # 마지막 발행된 속도값 저장
-        self.last_linear = 0.0
-        self.last_angular = 0.0
-        self.last_publish_time = self.get_clock().now()
-        self.joint1 = 225.0
-        self.joint2 = 45.0
-        self.joint3 = 90.0
-        self.joint_key1 = 0.0
-        self.joint_key2 = 0.0
-        self.joint_key3 = 0.0
-        self.joint_key4 = 0.0
-        self.Servo_leftX = 0
-        self.Servo_rightB = 0
-        self.Servo_downA = 0
-        self.Servo_upY = 0
+        # --- 상태 변수 ---
+        self.user_name = getpass.getuser()
+        self.Joy_active = False  # 자동으로 비활성화
+        self.Buzzer_active = False
+        self.cancel_time = time.time()
         self.linear_Gear = 1.0
         self.angular_Gear = 1.0
-        self.velocity = Twist()
-        self.PWMServo = PWMServo()
+        self.deadzone = 0.1  # 10% 데드존(10% 미만의 입력값 무시)
+        self.expo = 2.0  # 지수 커브 factor(1.0 = 선형, 2.0 = 제곱, 3.0 = 세제곱 등)
         
         # 서비스 호출과 다른 콜백이 겹치지 않도록 ReentrantCallbackGroup 사용
         self.callback_group = ReentrantCallbackGroup()
 
-        # --- 파라미터 선언 (rospy.get_param -> declare_parameter) ---
-        # ROS 2에서는 파라미터를 사용하기 전에 반드시 선언해야 함
-        self.declare_parameter('linear_speed_limit', 0.45)
-        self.declare_parameter('angular_speed_limit', 2.0)
-        # 선언된 파라미터 값 가져오기
+        # --- 파라미터 선언 ---
+        self.declare_parameter('linear_speed_limit', 1.0) # 기존 : 0.45
+        self.declare_parameter('angular_speed_limit', 2.00) # 기존 : 2.00
         self.linear_speed_limit = self.get_parameter('linear_speed_limit').get_parameter_value().double_value
         self.angular_speed_limit = self.get_parameter('angular_speed_limit').get_parameter_value().double_value
         self.get_logger().info(f"Speed limits: linear={self.linear_speed_limit}, angular={self.angular_speed_limit}")
 
-        # --- 퍼블리셔 생성 (rospy.Publisher -> self.create_publisher) ---
-        self.cmd_vel_publisher = self.create_publisher(Twist, '/cmd_vel', 10)
-        self.pub_pwmservo = self.create_publisher(PWMServo, "/PWMServo", 10)
-        self.pub_arm = self.create_publisher(Arm, "/TargetAngle", 10)
-        self.pub_goal = self.create_publisher(UUID, "/move_base/cancel", 10) # GoalID -> UUID
-        self.pub_joystate = self.create_publisher(JoyState, "/JoyState", 10)
-        self.pub_adjust = self.create_publisher(Adjust, "/Adjust", 10)
+        # --- 퍼블리셔 생성 ---
+        self.cmdVelPublisher = self.create_publisher(Twist, '/cmd_vel', 10)
+        self.pub_Adjust = self.create_publisher(Adjust, "/Adjust", 10)
+        self.pub_Buzzer = self.create_publisher(Bool, "Buzzer", 1)
+        self.pub_JoyState = self.create_publisher(Bool, "JoyState", 10)
 
-        # --- 서비스 클라이언트 생성 (rospy.ServiceProxy -> self.create_client) ---
-        # 서비스 호출은 비동기 방식으로 동작
-        self.robot_arm_client = self.create_client(RobotArm, "/CurrentAngle", callback_group=self.callback_group)
-        self.rgb_light_client = self.create_client(RGBLight, "/RGBLight", callback_group=self.callback_group)
-        self.buzzer_client = self.create_client(Buzzer, "/Buzzer", callback_group=self.callback_group)
-        self.cam_device_client = self.create_client(CamDevice, "/CamDevice", callback_group=self.callback_group)
-        self.headlight_client = self.create_client(Headlight, "/Headlight", callback_group=self.callback_group)
-
-        # --- 서브스크라이버 생성 (rospy.Subscriber -> self.create_subscription) ---
-        self.sub_joy = self.create_subscription(
+        # --- 서브스크라이버 생성 ---
+        self.sub_Joy = self.create_subscription(
             Joy,
             '/joy',
-            self.button_callback,
+            self.buttonCallback,
             10,
             callback_group=self.callback_group)
-
-        # --- 스레드 생성 ---
-        # rospy.is_shutdown() 대신 rclpy.ok()를 사용하도록 스레드 로직 수정 필요
-        self.pwm_thread = threading.Thread(target=self.analyse_PWM)
-        self.pwm_thread.setDaemon(True)
-        self.pwm_thread.start()
         
         self.get_logger().info("Joy Teleop Node has been started.")
 
-    # ROS 1의 rospy.on_shutdown() 대신 노드 소멸 시 호출되는 메서드를 만들어 정리
-    def destroy_node(self):
-        self.get_logger().info("Shutting down node.")
-        # 스레드가 rclpy.ok() 루프를 탈출할 수 있도록 약간의 시간을 줌
-        time.sleep(0.1)
-        # ROS 2에서는 퍼블리셔, 서브스크라이버 등을 수동으로 unregister 할 필요 없이
-        # destroy_node()가 자동으로 처리해주지만, 명시적으로 정리할 수 있음.
-        super().destroy_node()
-
-    def button_callback(self, joy_data: Joy):
-        self.get_logger().info("=== Button Callback Called ===")
-        try:
-            # 조이스틱 데이터 유효성 검사
-            if not isinstance(joy_data, Joy) or len(joy_data.axes) < 3:
-                self.get_logger().warn("Invalid joy data")
-                return
-
-            self.get_logger().info("=== Joy Callback Debug ===")
-            self.get_logger().info(f"Joy data received: axes={joy_data.axes}, buttons={joy_data.buttons}")
-            self.get_logger().info(f"Current state: Joy_active={self.Joy_active}, linear_Gear={self.linear_Gear}, angular_Gear={self.angular_Gear}")
-
-            # 사용자 환경에 따라 적절한 처리 함수 호출
-            if self.user_name == "pi":
-                linear_speed = joy_data.axes[1] * self.linear_speed_limit * self.linear_Gear
-                angular_speed = joy_data.axes[3] * self.angular_speed_limit * self.angular_Gear
-            else:  # jetson
-                linear_speed = joy_data.axes[1] * self.linear_speed_limit * self.linear_Gear
-                angular_speed = joy_data.axes[2] * self.angular_speed_limit * self.angular_Gear
-
-            # 속도 제한 적용
-            if linear_speed > self.linear_speed_limit:
-                linear_speed = self.linear_speed_limit
-            elif linear_speed < -self.linear_speed_limit:
-                linear_speed = -self.linear_speed_limit
-                
-            if angular_speed > self.angular_speed_limit:
-                angular_speed = self.angular_speed_limit
-            elif angular_speed < -self.angular_speed_limit:
-                angular_speed = -self.angular_speed_limit
-
-            self.get_logger().info(f"Calculated speeds: linear={linear_speed}, angular={angular_speed}")
-            self.get_logger().info(f"Speed limits: linear={self.linear_speed_limit}, angular={self.angular_speed_limit}")
-            
-            # Twist 메시지 생성 및 발행
-            twist = Twist()
-            twist.linear.x = linear_speed
-            twist.angular.z = angular_speed
-            self.cmd_vel_publisher.publish(twist)
-            self.get_logger().info(f"Published Twist message: linear.x={linear_speed}, angular.z={angular_speed}")
-            
-            # Adjust 메시지 발행
-            self.pub_adjust.publish(Adjust(adjust=linear_speed != 0))
-            
-        except Exception as e:
-            self.get_logger().error(f'Error in button_callback: {str(e)}')
-
-    # 이전 user_pi와 user_jetson 메서드는 제거하고 하나의 통합된 콜백으로 처리
-    # 내부의 서비스/토픽 호출 부분만 수정하면 됨 (이미 __init__에서 수정됨)
-    def user_pi(self,joy_data):
-        # 로직... (생략, 원본과 거의 동일)
-        linear_speed = joy_data.axes[1] * self.linear_speed_limit * self.linear_Gear
-        angular_speed = joy_data.axes[3] * self.angular_speed_limit * self.angular_Gear
-        self.pub_adjust.publish(Adjust(adjust=linear_speed != 0))
-        # ... (이하 로직은 원본 참조)
-        twist = Twist()
-        twist.linear.x = linear_speed
-        twist.angular.z = angular_speed
-        self.cmd_vel_publisher.publish(twist)
+    def buttonCallback(self, joy_data):
+        '''
+        조이스틱 입력 처리
+        '''
+        if not isinstance(joy_data, Joy): 
+            return
         
-    def user_jetson(self,joy_data):
-        # 로직... (생략, 원본과 거의 동일)
-        linear_speed = joy_data.axes[1] * self.linear_speed_limit * self.linear_Gear
-        angular_speed = joy_data.axes[2] * self.angular_speed_limit * self.angular_Gear
-        self.pub_adjust.publish(Adjust(adjust=linear_speed != 0))
-        # ... (이하 로직은 원본 참조)
-        twist = Twist()
-        twist.linear.x = linear_speed
-        twist.angular.z = angular_speed
-        self.cmd_vel_publisher.publish(twist)
+        # 디버그 로그 
+        self.get_logger().info(f"Joy received - axes[1]={joy_data.axes[1]:.3f}, axes[2]={joy_data.axes[2]:.3f}")
+        #print(f"\rJoy received - axes[1]={joy_data.axes[1]:.3f}, axes[2]={joy_data.axes[2]:.3f}    ", end="", flush=True)
+        # 사용자 환경에 따라 적절한 처리
+        if self.user_name == "pi": 
+            self.user_pi(joy_data)
+        else: 
+            self.user_jetson(joy_data)
+
+    def apply_deadzone_and_expo(self, value):
+        '''
+        데드존과 지수 커브를 적용하여 조이스틱 값을 조정
+        '''
+        # 데드존 적용
+        if abs(value) < self.deadzone:
+            return 0.0
+        
+        # 데드존을 벗어난 값을 0-1 범위로 재조정
+        sign = 1.0 if value > 0 else -1.0
+        value = abs(value)
+        normalized = (value - self.deadzone) / (1 - self.deadzone)
+        
+        # 지수 커브 적용
+        adjusted = normalized ** self.expo
+        
+        return sign * adjusted
+
+    def user_pi(self, joy_data):
+        '''
+        PI 환경용 - axes[3]이 회전
+        '''
+        # 데드존과 지수 커브 적용
+        linear_input = self.apply_deadzone_and_expo(joy_data.axes[1])
+        angular_input = self.apply_deadzone_and_expo(joy_data.axes[3])
+        
+        linear_speed = linear_input * self.linear_speed_limit * self.linear_Gear
+        angular_speed = angular_input * self.angular_speed_limit * self.angular_Gear
+        
+        self.publish_cmd_vel(linear_speed, angular_speed)
+
+    def user_jetson(self, joy_data):
+        '''
+        Jetson 환경용 - axes[2]가 회전
+        '''
+        #cancel nav
+        if joy_data.buttons[9] == 1: self.cancel_nav()
+        
+        #Buzzer
+        if joy_data.buttons[11] == 1:
+            Buzzer_ctrl = Bool() 
+            self.Buzzer_active=not self.Buzzer_active
+            Buzzer_ctrl.data =self.Buzzer_active
+            for i in range(3): self.pub_Buzzer.publish(Buzzer_ctrl)
+
+        # 데드존과 지수 커브 적용
+        linear_input = self.apply_deadzone_and_expo(joy_data.axes[1])
+        angular_input = self.apply_deadzone_and_expo(joy_data.axes[2])
+        
+        linear_speed = linear_input * self.linear_speed_limit * self.linear_Gear
+        angular_speed = angular_input * self.angular_speed_limit * self.angular_Gear
+        
+        self.publish_cmd_vel(linear_speed, angular_speed)
 
     def cancel_nav(self):
         now_time = time.time()
-        self.get_logger().info("=== Cancel Nav Debug ===")
-        self.get_logger().info(f"Time diff: {now_time - self.cancel_time}")
         if now_time - self.cancel_time > 1:
-            self.get_logger().info(f"Joy_active changing from {self.Joy_active} to {not self.Joy_active}")
+            Joy_ctrl = Bool()
             self.Joy_active = not self.Joy_active
-            self.pub_joystate.publish(JoyState(state=self.Joy_active))
-            # ROS 2에서는 GoalID 대신 UUID를 사용하며, 일반적으로 비어있는 메시지를 보냄
-            self.pub_goal.publish(UUID())
-            self.get_logger().info("Published cancel goal message")
+            Joy_ctrl.data = self.Joy_active
+            for i in range(3):
+                self.pub_JoyState.publish(Joy_ctrl)
+                #self.pub_goal.publish(GoalID())
+                self.cmdVelPublisher.publish(Twist())
             self.cancel_time = now_time
 
-    def PWMServo_topic(self, id, angle):
-        self.PWMServo.id = id
-        self.PWMServo.angle = int(angle)
-        self.pub_pwmservo.publish(self.PWMServo)
+    def publish_cmd_vel(self, linear_speed, angular_speed):
+        '''
+        cmd_vel 메시지 발행
+        '''
+        # 조이스틱 비활성 상태면 발행하지 않음 (cancel_nav로 토글)
+        if not self.Joy_active:
+             return
 
-    # --- 서비스 호출 래퍼 함수 (비동기 처리) ---
-    # ROS 1의 동기(blocking) 호출을 ROS 2의 비동기(non-blocking) 방식으로 변경
-    def send_service_request(self, client, request):
-        # 서비스가 사용 가능한지 확인
-        if not client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().error(f'Service {client.srv_name} not available')
-            return None
+        # 속도 제한 적용
+        if linear_speed > self.linear_speed_limit: 
+            linear_speed = self.linear_speed_limit
+        elif linear_speed < -self.linear_speed_limit: 
+            linear_speed = -self.linear_speed_limit
+            
+        if angular_speed > self.angular_speed_limit: 
+            angular_speed = self.angular_speed_limit
+        elif angular_speed < -self.angular_speed_limit: 
+            angular_speed = -self.angular_speed_limit
+
+        # Twist 메시지 생성 및 발행
+        twist = Twist()
+        twist.linear.x = linear_speed
+        twist.angular.z = angular_speed
+        self.cmdVelPublisher.publish(twist)
         
-        # 비동기적으로 서비스를 호출하고 future 객체를 받음
-        future = client.call_async(request)
-        # 응답이 올 때까지 기다림 (주의: MultiThreadedExecutor 사용 필수)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
+        # Adjust 메시지 발행
+        adjust_msg = Adjust()
+        adjust_msg.adjust = (linear_speed != 0)
+        self.pub_Adjust.publish(adjust_msg)
         
-        if future.result() is not None:
-            return future.result()
-        else:
-            self.get_logger().error(f'Exception while calling service {client.srv_name}')
-            return None
+        self.get_logger().info(f"Published: linear={linear_speed:.3f}, angular={angular_speed:.3f}")
+        #print(f"\rPublished: linear={linear_speed:.3f}, angular={angular_speed:.3f}    ", end="", flush=True)
 
-    def Buzzer_srv(self, value):
-        request = Buzzer.Request()
-        request.buzzer = value
-        response = self.send_service_request(self.buzzer_client, request)
-        return response.result if response else False
-
-    def Headlight_srv(self, value):
-        request = Headlight.Request()
-        request.headlight = value
-        response = self.send_service_request(self.headlight_client, request)
-        return response.result if response else False
-
-    def RGBLight_srv(self, effect, speed):
-        request = RGBLight.Request()
-        request.effect = effect
-        request.speed = speed
-        response = self.send_service_request(self.rgb_light_client, request)
-        return response.result if response else False
-
-    def RobotArmSrv(self, value):
-        request = RobotArm.Request()
-        request.command = value
-        response = self.send_service_request(self.robot_arm_client, request)
-        if response and response.result:
-            self.joint1 = response.angles[0]
-            self.joint2 = response.angles[1]
-            self.joint3 = response.angles[2]
-            self.get_logger().info(f"Arm_joints: [{self.joint1}, {self.joint2}, {self.joint3}]")
-            return True
-        return False
-
-    def arm_ctrl(self, run_time, j1, j2, j3):
-        # 로직은 원본과 동일
-        robot_arm = Arm()
-        # ... (생략)
-        self.pub_arm.publish(robot_arm)
-        
-    def analyse_PWM(self):
-        # 스레드 시작 전 rclpy가 준비될 때까지 잠시 대기
-        time.sleep(2.0)
-        self.get_logger().info("PWM analysis thread started.")
-        self.RobotArmSrv("getJoint")
-        # rospy.is_shutdown() 대신 rclpy.ok()를 사용하여 루프 제어
-        while rclpy.ok():
-            # 내부 로직은 원본과 거의 동일
-            if not self.joint_key1 == self.joint_key2 == self.joint_key3 == self.joint_key4 == 0:
-                # ...
-                self.arm_ctrl(0.01 * 1000, self.joint1, self.joint2, self.joint3)
-            if not self.Servo_leftX == self.Servo_rightB == self.Servo_downA == self.Servo_upY == 0:
-                # ...
-                self.PWMServo_topic(1, self.PWMServo_X)
-
-            # rospy.sleep() 대신 time.sleep() 사용
-            time.sleep(0.01)
-        self.get_logger().info("PWM analysis thread finished.")
-
-
-# --- 메인 실행 블록 (ROS 2 스타일) ---
 def main(args=None):
-    # rclpy 초기화
     rclpy.init(args=args)
     
-    # JoyTeleop 노드 인스턴스 생성
-    joy_teleop_node = JoyTeleop()
+    joy = JoyTeleop()
     
-    # 멀티스레드 실행기(Executor)를 사용하여 노드를 실행
-    # 서비스 호출이 콜백 함수를 막지 않도록 하기 위함
     executor = MultiThreadedExecutor()
-    executor.add_node(joy_teleop_node)
-
+    executor.add_node(joy)
+    
     try:
-        # 실행기가 노드를 계속 실행하도록 함 (rospy.spin()과 유사)
         executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
-        # 노드 종료 및 rclpy 종료
-        joy_teleop_node.destroy_node()
+        joy.destroy_node()
         rclpy.shutdown()
 
 

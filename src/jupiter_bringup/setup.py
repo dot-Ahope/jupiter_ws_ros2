@@ -39,6 +39,7 @@ setup(
             'calibrate_angular = jupiter_bringup.calibrate_angular:main',
             'calibrate_linear = jupiter_bringup.calibrate_linear:main',
             'jupiter_driver = jupiter_bringup.jupiter_driver:main',
+            'jupiter_driver_compensated = jupiter_bringup.jupiter_driver_compensated:main',
             'jupiter_patrol = jupiter_bringup.jupiter_patrol:main',
             'rtcm_ublox_bridge = jupiter_bringup.rtcm_ublox_bridge:main',
         ],

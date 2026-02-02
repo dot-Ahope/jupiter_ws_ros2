@@ -108,14 +108,44 @@ class JoyTeleop(Node):
         '''
         Jetson 환경용 - axes[2]가 회전
         '''
-        # 데드존과 지수 커브 적용
-        linear_input = self.apply_deadzone_and_expo(joy_data.axes[1])
-        angular_input = self.apply_deadzone_and_expo(joy_data.axes[2])
+        # 조이스틱 값이 0.2 이상되어야 처리 (User req)
+        deadzone_threshold = 0.2
         
-        linear_speed = linear_input * self.linear_speed_limit * self.linear_Gear
-        angular_speed = angular_input * self.angular_speed_limit * self.angular_Gear
+        # Linear (start from 2.0)
+        lin_raw = joy_data.axes[1]
+        linear_val = 0.0
+        if abs(lin_raw) >= deadzone_threshold:
+            sign = 1.0 if lin_raw > 0 else -1.0
+            # 0.2~1.0 -> 0.0~1.0
+            ratio = (abs(lin_raw) - deadzone_threshold) / (1.0 - deadzone_threshold)
+            # 2.0부터 시작 + 추가 속도(limit 값 활용)
+            base_speed = 2.0
+            linear_val = sign * (base_speed + ratio * self.linear_speed_limit * self.linear_Gear)
+
+        # Angular (start from 1.0)
+        ang_raw = joy_data.axes[2]
+        angular_val = 0.0
+        if abs(ang_raw) >= deadzone_threshold:
+            sign = 1.0 if ang_raw > 0 else -1.0
+            ratio = (abs(ang_raw) - deadzone_threshold) / (1.0 - deadzone_threshold)
+            # 1.0부터 시작 + 추가 속도
+            base_speed = 1.0
+            angular_val = sign * (base_speed + ratio * self.angular_speed_limit * self.angular_Gear)
         
-        self.publish_cmd_vel(linear_speed, angular_speed)
+        # publish_cmd_vel 함수는 min/max 제한이 있으므로 직접 publish 하거나 제한을 우회하는 함수 사용
+        self.publish_direct_cmd_vel(linear_val, angular_val)
+
+    def publish_direct_cmd_vel(self, linear_speed, angular_speed):
+        '''
+        제한 없이 직접 cmd_vel 발행
+        '''
+        twist = Twist()
+        twist.linear.x = float(linear_speed)
+        twist.angular.z = float(angular_speed)
+        self.cmdVelPublisher.publish(twist)
+        
+        # 디버그 로그
+        self.get_logger().info(f"PublishedDirect: linear={linear_speed:.3f}, angular={angular_speed:.3f}")
 
     def publish_cmd_vel(self, linear_speed, angular_speed):
         '''

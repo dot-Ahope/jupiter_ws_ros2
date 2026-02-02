@@ -50,7 +50,7 @@ local_costmap:
       width: 3
       height: 3
       resolution: 0.05
-      footprint: "[ [0.18, 0.1225], [0.18, -0.1225], [-0.18, -0.1225], [-0.18, 0.1225] ]"
+      footprint: "[ [0.12, 0.12], [0.12, -0.12], [-0.12, -0.12], [-0.12, 0.12] ]"
       plugins: ["voxel_layer", "inflation_layer"]
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
@@ -61,16 +61,16 @@ local_costmap:
         z_voxels: 16
         max_obstacle_height: 2.0
         mark_threshold: 0
-        observation_sources: pointcloud
-        pointcloud:
-          topic: /visual_slam/vis/observations_cloud
+        observation_sources: velodyne_pointcloud
+        velodyne_pointcloud:
+          topic: /velodyne_points
           max_obstacle_height: 2.0
-          min_obstacle_height: 0.0
-          clearing: False
+          min_obstacle_height: -0.1
+          clearing: True
           marking: True
           data_type: "PointCloud2"
-          raytrace_max_range: 15.0
-          obstacle_max_range: 10.0
+          raytrace_max_range: 20.0
+          obstacle_max_range: 15.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
@@ -84,8 +84,7 @@ global_costmap:
       global_frame: map
       robot_base_frame: base_link
       use_sim_time: False
-      robot_radius: 0.22 # robot_radius replaced with footprint for better fit
-      footprint: "[ [0.18, 0.1225], [0.18, -0.1225], [-0.18, -0.1225], [-0.18, 0.1225] ]"
+      robot_radius: 0.15
       resolution: 0.05
       track_unknown_space: true
       # Static Layer removed for vSLAM
@@ -98,16 +97,16 @@ global_costmap:
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
-        observation_sources: pointcloud
-        pointcloud:
-          topic: /visual_slam/vis/observations_cloud
+        observation_sources: velodyne_pointcloud
+        velodyne_pointcloud:
+          topic: /velodyne_points
           max_obstacle_height: 2.0
-          min_obstacle_height: 0.0
-          clearing: False
+          min_obstacle_height: -0.1
+          clearing: True
           marking: True
           data_type: "PointCloud2"
-          raytrace_max_range: 15.0
-          obstacle_max_range: 10.0
+          raytrace_max_range: 20.0
+          obstacle_max_range: 15.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
@@ -173,7 +172,7 @@ controller_server:
     controller_frequency: 20.0
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
-    min_theta_velocity_threshold: 0.01 # Restored for fine control
+    min_theta_velocity_threshold: 0.01
     failure_tolerance: 0.3
     progress_checker_plugin: "progress_checker"
     goal_checker_plugins: ["general_goal_checker"] 
@@ -195,24 +194,18 @@ controller_server:
       debug_trajectory_details: True
       min_vel_x: 0.0
       min_vel_y: 0.0
-      # max_vel_x: 0.8 #기본값 : 1.0
-      max_vel_x: 0.45 # Moderate speed
+      max_vel_x: 0.26
       max_vel_y: 0.0
-      # max_vel_theta: 1.0 #기본값 : 2.0
-      max_vel_theta: 0.45 # Limited to 0.45 as requested
+      max_vel_theta: 1.0
       min_speed_xy: 0.0
-      # max_speed_xy: 1.0
-      max_speed_xy: 0.45
-      min_speed_theta: 0.0 # Restored for fine control
-      # acc_lim_x: 0.6
-      acc_lim_x: 0.5
+      max_speed_xy: 0.26
+      min_speed_theta: 0.0 #기본값 0.0
+      acc_lim_x: 2.5
       acc_lim_y: 0.0
-      # acc_lim_theta: 2.0
-      acc_lim_theta: 1.0 # Reduced slightly to match lower max speed
-
-      decel_lim_x: -0.5
+      acc_lim_theta: 3.2
+      decel_lim_x: -2.5
       decel_lim_y: 0.0
-      decel_lim_theta: -1.0
+      decel_lim_theta: -3.2
       vx_samples: 20
       vy_samples: 5
       vtheta_samples: 20
@@ -220,7 +213,7 @@ controller_server:
       linear_granularity: 0.05
       angular_granularity: 0.025
       transform_tolerance: 2.0
-      xy_goal_tolerance: 0.10
+      xy_goal_tolerance: 0.25
       trans_goal_tolerance: 0.25
       short_circuit_trajectory_evaluation: True
       stateful: True
