@@ -1,0 +1,19 @@
+# Optimised KISS-ICP Configuration for Jetson Orin Nano (VLP-16)
+# Goal: Reduce CPU usage by limiting range and increasing voxel size
+
+kiss_icp_node:
+  ros__parameters:
+    # ROS-related optional parameters
+    # These are already set in launch file, but good to have here too if needed
+    # base_frame: "base_link"
+    # lidar_odom_frame: "odom" 
+    
+    # Core KISS-ICP parameters
+    data:
+      deskew: False          # VLP-16 usually doesn't need heavy deskewing if spinning fast enough compared to motion
+      max_range: 50.0        # Reduced from 100.0 to 50.0 to save CPU
+      min_range: 1.0         # Ignored < 1.0m to remove self-reflections/noise
+
+    mapping:
+      voxel_size: 0.5        # Increased to 0.5 (default is usually smaller or adaptive) for faster processing
+      max_points_per_voxel: 20

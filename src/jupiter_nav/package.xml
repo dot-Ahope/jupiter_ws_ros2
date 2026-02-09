@@ -1,0 +1,52 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>jupiter_nav</name>
+  <version>1.0.0</version>
+  <description>Jupiter Navigation and SLAM integration package using Nav2, SLAM Toolbox, and robot_localization EKF</description>
+  <maintainer email="user@jupiter.local">Jupiter User</maintainer>
+  <license>Apache-2.0</license>
+
+  <!-- Python dependencies -->
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
+  
+  <!-- Navigation stack dependencies -->
+  <depend>nav2_msgs</depend>
+  <depend>nav2_common</depend>
+  <depend>nav2_bringup</depend>
+  <depend>nav2_lifecycle_manager</depend>
+  <depend>nav2_controller</depend>
+  <depend>nav2_planner</depend>
+  <depend>nav2_behaviors</depend>
+  <depend>nav2_bt_navigator</depend>
+  <depend>nav2_velocity_smoother</depend>
+  
+  <!-- SLAM and localization dependencies -->
+  <depend>slam_toolbox</depend>
+  <depend>robot_localization</depend>
+  <depend>rtabmap_ros</depend>
+  <depend>rtabmap_slam</depend>
+  <depend>rtabmap_viz</depend>
+  <depend>rtabmap_msgs</depend>
+  
+  <!-- Robot description and state -->
+  <depend>jupiter_description</depend>
+  <depend>jupiter_base</depend>
+  <depend>sllidar_ros2</depend>
+  
+  <!-- Utilities -->
+  <depend>ament_index_python</depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

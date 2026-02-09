@@ -1,0 +1,119 @@
+#대역폭조절 버전
+
+# foxglove_bridge:
+#   ros__parameters:
+#     port: 8765
+#     address: '0.0.0.0'
+#     tls: false
+#     # SSH 접속 보호: 필수 토픽만 전송
+#     topic_whitelist: 
+#       - '/tf'
+#       - '/tf_static'
+#       - '/robot_description'
+#       - '/scan'
+#       - '/map'
+#       - '/cmd_vel'
+#       - '/odom.*'
+#       # Isaac Visual SLAM Topics
+#       - '/visual_slam/tracking/odometry'
+#       # - '/visual_slam/vis/.*'           # 대용량 PointCloud 제외 (대역폭 초과 원인)
+#       - '/visual_slam/status'           # SLAM 상태 정보
+#       - '/camera/infra1/image_rect_raw' # 적외선 카메라 이미지
+#       - '/camera/infra1/camera_info'
+#       # Nav2 Topics
+#       - '/plan'
+#       - '/local_plan'
+#       - '/global_costmap/costmap'
+#       - '/global_costmap/costmap_updates'
+#       - '/local_costmap/costmap'
+#       - '/local_costmap/costmap_updates'
+#       - '/particle_cloud'               # AMCL (사용 시)
+#       - '/waypoint_follower/transition_event'
+#       - '/goal_pose'
+#       - '/clicked_point'
+#       - '/initialpose'
+#       # Jupiter Driver Topics
+#       - '/jupiter/imu'
+#       - '/jupiter/get_vel'
+#       - '/imu/data_calibrated'
+#     # send_buffer_limit: 20000000  # 100MB -> 20MB (1/5로 감소)
+#     send_buffer_limit: 50000000  # 20MB -> 50MB (SLAM 데이터 수용)
+#     use_compression: true
+#     max_qos_depth: 1  # 큐 깊이 최소화
+#     capabilities: 
+#       - clientPublish
+#       - parameters
+#       - parametersSubscribe
+#       - services
+#       - connectionGraph
+#       - assets
+#     asset_uri_allowlist: 
+#       - '^package://.*'
+
+
+#-------------------------------------------------
+#대역폭조절 없는 기본 버전
+
+foxglove_bridge:
+  ros__parameters:
+    port: 8765
+    address: '0.0.0.0'
+    tls: false
+    # SSH 접속 보호: 필수 토픽만 전송
+    topic_whitelist: 
+      - '/tf'
+      - '/tf_static'
+      - '/robot_description'
+      - '/scan'
+      - '/map'
+      - '/cmd_vel'
+      - '/odom.*'
+      # Isaac Visual SLAM Topics (Updated)
+      - '/visual_slam/tracking/odometry'
+      - '/visual_slam/tracking/vo_path'        # 추가: VO 경로
+      - '/visual_slam/tracking/slam_path'      # 추가: SLAM 경로
+      - '/visual_slam/vis/landmarks_cloud'     # 추가: 랜드마크 (데이터 큼)
+      - '/visual_slam/vis/observations_cloud'  # 추가: 관측 점군 (데이터 큼)
+      - '/visual_slam/vis/loop_closure_cloud'  # 추가: 루프 클로저
+      - '/visual_slam/vis/pose_graph_nodes'    # 추가: 포즈 그래프
+      - '/visual_slam/vis/pose_graph_edges'
+      - '/visual_slam/vis/velocity'
+      - '/visual_slam/vis/slam_odometry'
+      - '/visual_slam/vis/gravity'
+      - '/visual_slam/status'
+      - '/camera/infra1/image_rect_raw'
+      - '/camera/infra1/camera_info'
+      - '/camera/infra2/image_rect_raw'        # 추가: Infra2 카메라
+      # - '/visual_slam/vis/.*'           # 대용량 PointCloud 제외 (대역폭 초과 원인)
+      - '/visual_slam/status'           # SLAM 상태 정보
+      - '/camera/infra1/image_rect_raw' # 적외선 카메라 이미지
+      - '/camera/infra1/camera_info'
+      # Nav2 Topics
+      - '/plan'
+      - '/local_plan'
+      - '/global_costmap/costmap'
+      - '/global_costmap/costmap_updates'
+      - '/local_costmap/costmap'
+      - '/local_costmap/costmap_updates'
+      - '/particle_cloud'               # AMCL (사용 시)
+      - '/waypoint_follower/transition_event'
+      - '/goal_pose'
+      - '/clicked_point'
+      - '/initialpose'
+      # Jupiter Driver Topics
+      - '/jupiter/imu'
+      - '/jupiter/get_vel'
+      - '/imu/data_calibrated'
+    # send_buffer_limit: 20000000  # 100MB -> 20MB (1/5로 감소)
+    send_buffer_limit: 50000000  # 20MB -> 50MB (SLAM 데이터 수용)
+    use_compression: true
+    max_qos_depth: 1  # 큐 깊이 최소화
+    capabilities: 
+      - clientPublish
+      - parameters
+      - parametersSubscribe
+      - services
+      - connectionGraph
+      - assets
+    asset_uri_allowlist: 
+      - '^package://.*'
