@@ -69,12 +69,12 @@ local_costmap:
           clearing: False
           marking: True
           data_type: "PointCloud2"
-          raytrace_max_range: 15.0
-          obstacle_max_range: 10.0
+          raytrace_max_range: 3.0  # 실내 환경에 적합한 범위
+          obstacle_max_range: 2.5
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.55
+        inflation_radius: 0.35  # 로봇 반경 0.22 + 안전거리
 
 global_costmap:
   global_costmap:
@@ -106,12 +106,12 @@ global_costmap:
           clearing: False
           marking: True
           data_type: "PointCloud2"
-          raytrace_max_range: 15.0
-          obstacle_max_range: 10.0
+          raytrace_max_range: 3.0  # 실내 환경에 적합한 범위
+          obstacle_max_range: 2.5
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.55
+        inflation_radius: 0.35  # 로봇 반경 0.22 + 안전거리
 
 bt_navigator:
   ros__parameters:
@@ -158,7 +158,7 @@ bt_navigator:
 
 planner_server:
   ros__parameters:
-    expected_planner_frequency: 20.0
+    expected_planner_frequency: 10.0  # Jetson CPU 부하 고려
     use_sim_time: False
     planner_plugins: ["GridBased"]
     GridBased:
@@ -173,7 +173,7 @@ controller_server:
     controller_frequency: 20.0
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
-    min_theta_velocity_threshold: 0.01 # Restored for fine control
+    min_theta_velocity_threshold: 0.15  # 마찰력(0.10) 이상으로 설정하여 정지마찰 극복
     failure_tolerance: 0.3
     progress_checker_plugin: "progress_checker"
     goal_checker_plugins: ["general_goal_checker"] 
@@ -195,27 +195,22 @@ controller_server:
       debug_trajectory_details: True
       min_vel_x: 0.0
       min_vel_y: 0.0
-      # max_vel_x: 0.8 #기본값 : 1.0
-      max_vel_x: 0.45 # Moderate speed
+      max_vel_x: 0.45  # 선속도 최대값
       max_vel_y: 0.0
-      # max_vel_theta: 1.0 #기본값 : 2.0
-      max_vel_theta: 0.45 # Limited to 0.45 as requested
+      max_vel_theta: 1.0  # 각속도 최대값 (비선형 보상 고려, 과회전 방지)
       min_speed_xy: 0.0
-      # max_speed_xy: 1.0
       max_speed_xy: 0.45
-      min_speed_theta: 0.0 # Restored for fine control
-      # acc_lim_x: 0.6
+      min_speed_theta: 0.15  # 마찰 보상이 적용되므로 다시 낮춤 (부드러운 주행 유도)
       acc_lim_x: 0.5
       acc_lim_y: 0.0
-      # acc_lim_theta: 2.0
-      acc_lim_theta: 1.0 # Reduced slightly to match lower max speed
+      acc_lim_theta: 0.8  # 각가속도 완화 (부드러운 회전)
 
       decel_lim_x: -0.5
       decel_lim_y: 0.0
-      decel_lim_theta: -1.0
+      decel_lim_theta: -0.8
       vx_samples: 20
       vy_samples: 5
-      vtheta_samples: 20
+      vtheta_samples: 25  # 각속도 샘플 증가로 세밀한 제어
       sim_time: 1.7
       linear_granularity: 0.05
       angular_granularity: 0.025

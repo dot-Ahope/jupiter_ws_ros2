@@ -19,7 +19,7 @@ def generate_launch_description():
     
     # 0. Robot Description & Driver (Hardware Interface)
     # Load URDF (Includes camera_link definition)
-    urdf_file = os.path.join(pkg_jupiter_description, 'urdf', 'jupiter_astra.urdf')
+    urdf_file = os.path.join(pkg_jupiter_description, 'urdf', 'jupiter_simple.urdf')
     robot_description = ParameterValue(Command(['xacro ', urdf_file]), value_type=str)
     
     rsp_node = Node(
@@ -31,11 +31,13 @@ def generate_launch_description():
 
     # TF bridge from base_link to camera_link (RealSense)
     # Connecting the robot base to the camera tree to fix "unconnected trees" error.
-    # Using Astra mount position as approximation: xyz="0.0484 0 0.10494", no rotation
+    # Isaac ROS Visual SLAM은 'camera_link'를 'camera_frame'으로 사용하고 있음
+    # 따라서 base_link -> camera_link 변환이 필수적임
+    # 업데이트(2026-02-04): 사용자 실측값 적용 (X=0.274, Z=0.055)
     tf_base_to_camera = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        arguments = ['0.0484', '0', '0.105', '0', '0', '0', 'base_link', 'camera_link']
+        arguments = ['0.274', '0', '0.055', '0', '0', '0', 'base_link', 'camera_link'] # camera_link를 child로
     )
 
     # Jupiter Driver (Low level serial comms)

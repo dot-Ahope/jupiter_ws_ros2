@@ -1,5 +1,6 @@
 #include "jupiter_base/base.hpp"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
+#include <cmath>
 
 RobotBase::RobotBase()
     : Node("base_node"),
@@ -85,6 +86,8 @@ void RobotBase::velCallback(const geometry_msgs::msg::Twist::SharedPtr msg)
     x_pos_ += delta_x;
     y_pos_ += delta_y;
     heading_ += delta_heading;
+    // [-π, π] 정규화: heading 누적 시 ±π 교차 지점에서 quaternion qz 부호 반전 방지
+    heading_ = std::atan2(std::sin(heading_), std::cos(heading_));
 
 
     // Create quaternion from yaw

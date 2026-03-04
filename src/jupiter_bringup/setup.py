@@ -42,6 +42,7 @@ setup(
             'jupiter_driver_compensated = jupiter_bringup.jupiter_driver_compensated:main',
             'jupiter_patrol = jupiter_bringup.jupiter_patrol:main',
             'rtcm_ublox_bridge = jupiter_bringup.rtcm_ublox_bridge:main',
+            'gyro_pid_node = jupiter_bringup.gyro_pid_node:main',
         ],
     },
 )

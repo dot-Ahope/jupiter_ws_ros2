@@ -1,0 +1,268 @@
+# =============================================================================
+# EKF Sensor Fusion Configuration for Isaac VSLAM + RF2O + Wheel Odom + IMU
+# =============================================================================
+#
+# 센서 융합 전략:
+#   odom0: /odom_adapted        (Wheel Odometry - 엔코더 기반 속도, 동적 공분산 적용)
+#   odom1: /visual_slam/tracking/odometry_adapted (Isaac VSLAM Visual Odometry)
+#   odom2: /odom_rf2o           (RF2O LiDAR Odometry - 절대 위치)
+#   imu0:  /imu/data_calibrated (MCU IMU - 보정 후)
+#
+# 동적 공분산 전략 (odom_covariance_adapter 노드가 처리):
+#   - odom_raw는 base.cpp에서 공분산 없이(0) 발행됨
+#   - odom_covariance_adapter가 속도 기반 동적 공분산을 적용하여 /odom_adapted로 재발행
+#   - 정지 시: 낮은 공분산 (신뢰도 높음) → 드리프트 방지
+#   - 고속 시: 높은 공분산 (신뢰도 낮음) → 슬립/미끄러짐 반영
+#   - VSLAM 실패 시: wheel odom + RF2O + IMU로 연속 주행 가능
+#
+# Isaac VSLAM 공분산:
+#   - vslam_covariance_adapter가 최소 공분산을 부여
+#   - differential 모드로 사용하여 절대 위치 점프 방지
+#   - 포즈(x,y,yaw)와 속도(vx,vy,vyaw) 모두 활용
+#
+# RF2O LiDAR Odometry:
+#   - /scan 기반 스캔 매칭 오도메트리 (10Hz)
+#   - 절대 위치(x,y,yaw) 제공 — VSLAM과 독립적인 위치 보정
+#   - LiDAR 기반이므로 조명 변화에 영향 없음
+#
+# =============================================================================
+
+ekf_filter_node:
+  ros__parameters:
+    # ============================================================
+    # 기본 EKF 설정
+    # ============================================================
+    frequency: 30.0           # 30Hz - Jetson 부하 고려 (50Hz에서 rate miss 발생)
+    sensor_timeout: 0.5       # 센서 타임아웃 (초) - VSLAM 복구 시간 고려
+    two_d_mode: true          # 2D 평면 로봇 (floor robot)
+    publish_tf: true          # odom → base_link TF 발행
+    publish_acceleration: false
+    
+    transform_time_offset: 0.0
+    transform_timeout: 0.0
+    
+    print_diagnostics: true   # 디버깅용 진단 메시지 발행
+    
+    # 프레임 설정
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: base_footprint  # URDF: base_footprint → base_link, 따라서 EKF는 odom → base_footprint 발행
+    world_frame: odom
+
+    # ============================================================
+    # odom0: Wheel Odometry (동적 공분산 적용된 /odom_adapted)
+    # ============================================================
+    # 원본: base_node의 /odom_raw → odom_covariance_adapter → /odom_adapted
+    # 
+    # 엔코더 데이터 흐름:
+    #   MCU (10ms 주기) → 엔코더 읽기 → PID 제어 → 속도 계산 (mm/s)
+    #   → UART (40ms 주기) → Rosmaster_Lib → /jupiter/get_vel (Twist)
+    #   → base_node → 적분 → /odom_raw (Odometry, 공분산=0)
+    #   → odom_covariance_adapter → /odom_adapted (속도 기반 동적 공분산)
+    #
+    # 차등 구동 파라미터 (MCU app_differential.h):
+    #   바퀴 지름: 68.5mm (원주 215.2mm)
+    #   축간 거리: 329.11mm (반 164.555mm)
+    #   엔코더 분해능: 1320 펄스/회전
+    # ============================================================
+    odom0: /odom_adapted
+    odom0_config: [false, false, false,    # x, y, z (위치는 사용 안함 → 속도로 추정)
+                   false, false, false,    # roll, pitch, yaw
+                   true,  true,  false,    # vx, vy, vz ← 핵심: 엔코더 속도
+                   false, false, true,     # vroll, vpitch, vyaw ← 각속도
+                   false, false, false]    # ax, ay, az
+
+    odom0_differential: false   # 속도(twist)만 사용하므로 differential 불필요
+    odom0_relative: false
+    odom0_queue_size: 10
+    
+    # odom_adapted가 동적 공분산을 설정하므로 별도 twist_covariance 불필요
+    # 만약 동적 공분산 노드 없이 사용하려면 아래 주석 해제:
+    # odom0_twist_covariance: [0.01, 0.0, 0.0, 0.0, 0.0, 0.0,
+    #                          0.0, 0.01, 0.0, 0.0, 0.0, 0.0,
+    #                          0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    #                          0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    #                          0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    #                          0.0, 0.0, 0.0, 0.0, 0.0, 0.05]
+
+    # ============================================================
+    # odom1: Isaac VSLAM Visual Odometry
+    # ============================================================
+    # Isaac ROS cuVSLAM이 발행하는 비주얼 오도메트리
+    # - 스테레오/깊이 카메라 기반 6DoF 포즈 추정
+    # - tracking quality에 따라 자체 공분산 값 변동
+    # - differential 모드: 프레임 간 변위만 사용 (절대 위치 점프 방지)
+    #
+    # VSLAM 특성:
+    #   강점: 절대 위치 정확도 높음, 장기 드리프트 낮음
+    #   약점: 빠른 움직임/조명 변화에 tracking lost 가능
+    #   → 실패 시 wheel odom + IMU로 fallback
+    #
+    # 주의 (2026-02-26 진단 → 2026-02-27 수정):
+    #   vo_state:0 (tracking lost) 상태에서 VSLAM이 noisy 오도메트리를 발행하여
+    #   differential 모드에서 잘못된 yaw 변위가 EKF에 주입 → yaw 발산 (수백°).
+    #   → 해결: vslam_covariance_adapter에 vo_state 게이팅 추가
+    #     tracking lost 시 발행 차단, 복구 후 delay + 공분산 증폭으로 soft transition
+    #
+    # 2026-02-27 추가 진단 (IMU gyro scale 정상 확인 후):
+    #   VSLAM differential yaw가 빠른 회전 중 Wheel 대비 최대 ±21° 오차 발생
+    #   (motion blur, feature loss). 이 오차가 EKF에 누적되어 ~13° 영구 offset.
+    #   → yaw/vyaw 제거: 회전은 IMU(vyaw) + Wheel(vyaw)에만 위임
+    #   → VSLAM은 x, y, vx, vy 위치/병진속도만 기여 (원래 강점)
+    # ============================================================
+    odom1: /visual_slam/tracking/odometry_adapted
+    odom1_config: [true,  true,  false,    # x, y, z ← 위치 (z 제외: 2D 모드)
+                   false, false, false,    # roll, pitch, yaw ← 제거 (회전 중 ±21° 오차)
+                   true,  true,  false,    # vx, vy, vz ← 속도
+                   false, false, false,    # vroll, vpitch, vyaw ← 제거 (회전 중 오차)
+                   false, false, false]    # ax, ay, az
+
+    odom1_differential: true    # 중요: 절대 위치가 아닌 상대 변위 사용
+    odom1_relative: false
+    odom1_queue_size: 5
+    
+    # VSLAM 측정 거부 임계값 (Mahalanobis distance)
+    # VSLAM은 가끔 큰 점프를 발행할 수 있으므로 아웃라이어 거부 필요
+    odom1_pose_rejection_threshold: 5.0    # 위치 아웃라이어 거부
+    odom1_twist_rejection_threshold: 3.0   # 속도 아웃라이어 거부
+
+    # ============================================================
+    # odom2: RF2O LiDAR Odometry (절대 위치)
+    # ============================================================
+    # RF2O (Range Flow 2D Odometry):
+    #   - /scan 토픽의 연속 LiDAR 스캔을 매칭하여 로봇 변위 추정
+    #   - 10Hz, base_footprint 기준 절대 위치 발행
+    #   - LiDAR 기반이므로 조명/텍스처 변화에 무관 (VSLAM 보완)
+    #
+    # 융합 전략:
+    #   - 절대 위치(x, y)만 사용 — wheel odom 드리프트 보정
+    #   - yaw 제거: RF2O 스캔 매칭은 제자리 회전 시 부정확 (2026-02-26 진단)
+    #     → 제자리 회전 중 RF2O가 잘못된 yaw를 보고하여 EKF가 ~50° 발산
+    #     → yaw는 IMU(vyaw) + wheel(vyaw)에 위임
+    #   - differential=false: RF2O가 자체적으로 적분한 절대 위치 사용
+    #   - VSLAM 실패(tracking lost) 시 RF2O + wheel odom으로 안정 유지
+    #
+    # RF2O 특성:
+    #   강점: 조명 무관, 실내 환경에서 안정적, VSLAM과 독립 센서
+    #   약점: 긴 복도/대칭 환경에서 drift, 10Hz 제한, 제자리 회전 시 yaw 부정확
+    # ============================================================
+    odom2: /odom_rf2o_adapted
+    odom2_config: [true,  true,  false,    # x, y, z ← 절대 위치
+                   false, false, false,    # roll, pitch, yaw ← 제거 (회전 시 스캔매칭 실패)
+                   false, false, false,    # vx, vy, vz (위치로 추정)
+                   false, false, false,    # vroll, vpitch, vyaw
+                   false, false, false]    # ax, ay, az
+
+    odom2_differential: false   # 절대 위치 사용 (RF2O 자체 적분값)
+    odom2_relative: false
+    odom2_queue_size: 10
+    
+    # RF2O 공분산:
+    #   rf2o_covariance_adapter가 최소 공분산을 부여함
+    #   (robot_localization ROS2 Humble은 odomN_pose_covariance 파라미터 미지원)
+    #   - min_position_cov: 0.1 m²
+    #   - min_orientation_cov: 0.05 rad² (yaw 제거로 현재 미사용)
+    
+    odom2_pose_rejection_threshold: 5.0    # LiDAR odom 아웃라이어 거부
+
+    # ============================================================
+    # imu0: MCU IMU (보정 후)
+    # ============================================================
+    # 데이터 흐름:
+    #   MCU (ICM20948/MPU9250) → UART → Rosmaster_Lib → /jupiter/imu
+    #   → imu_calib (apply_calib_node) → /imu/data_calibrated
+    #
+    # 보정 내용:
+    #   - 가속도계 스케일/오프셋 보정
+    #   - 자이로스코프 바이어스 보정 (500샘플 평균)
+    #
+    # 사용 데이터:
+    #   - angular_velocity.z (yaw rate): 가장 신뢰할 수 있는 IMU 데이터
+    #   - linear_acceleration: 사용 안 함 (바이어스로 인한 발산 방지)
+    #
+    # 주의: MCU IMU는 orientation을 제공하지 않으므로 (orientation_covariance = [-1])
+    #       imu0_remove_gravitational_acceleration이 정상 작동하지 않음.
+    #       ax 바이어스 (~0.11 m/s²)가 EKF에서 지속 적분되어 발산 원인이 됨.
+    #       따라서 linear_acceleration은 융합하지 않음.
+    #
+    # IMU 공분산 (jupiter_driver_compensated.py에서 설정):
+    #   gyro_cov = 0.001 (rad/s)²
+    #   accel_cov = 0.01 (m/s²)²
+    #   orientation_covariance = [-1.0] × 9 (방향 미제공)
+    # ============================================================
+    imu0: /imu/data_calibrated
+    imu0_config: [false, false, false,     # x, y, z
+                  false, false, false,     # roll, pitch, yaw (방향 미제공)
+                  false, false, false,     # vx, vy, vz
+                  false, false, true,      # vroll, vpitch, vyaw ← 핵심: yaw rate
+                  false, false, false]     # ax, ay, az ← 사용 안 함 (바이어스 발산 방지)
+
+    imu0_differential: false
+    imu0_relative: false
+    imu0_queue_size: 10
+    imu0_remove_gravitational_acceleration: false
+    
+    # IMU 공분산 오버라이드 (실제 센서 노이즈 측정치 기반)
+    # jupiter_driver_compensated.py가 기본 공분산을 설정하지만,
+    # 여기서 EKF에 더 정확한 값을 제공
+    # 참고: robot_localization ROS2 Humble은 imuN_angular_velocity_covariance
+    # 파라미터를 지원하지 않음. IMU 공분산은 jupiter_driver_compensated.py에서
+    # 직접 설정됨 (gyro_cov=0.001, accel_cov=0.01)
+
+    # ============================================================
+    # Process Noise Covariance (15x15 대각행렬)
+    # ============================================================
+    # 상태 벡터: [x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az]
+    # 인덱스:     0  1  2   3     4      5    6   7   8    9     10      11    12  13  14
+    #
+    # 설계 원칙:
+    #   - 위치(0-2): 중간 노이즈 → wheel+VSLAM 융합이 보정
+    #   - 방향(3-5): yaw(5)는 낮은 노이즈 → IMU가 정확히 추적
+    #   - 속도(6-8): 중간 노이즈 → 엔코더 속도로 빠르게 수렴
+    #   - 각속도(9-11): vyaw(11)는 매우 낮은 노이즈 → IMU 우선
+    #   - 가속도(12-14): 높은 노이즈 → 가속도는 노이즈가 크므로 약하게 반영
+    # ============================================================
+    process_noise_covariance: [0.05,  0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,    0.0,   0.0,   0.0,
+                               0.0,   0.05,  0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,    0.0,   0.0,   0.0,
+                               0.0,   0.0,   0.06,  0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,    0.0,   0.0,   0.0,
+                               0.0,   0.0,   0.0,   0.03,  0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,    0.0,   0.0,   0.0,
+                               0.0,   0.0,   0.0,   0.0,   0.03,  0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,    0.0,   0.0,   0.0,
+                               0.0,   0.0,   0.0,   0.0,   0.0,   0.03,  0.0,   0.0,   0.0,   0.0,   0.0,   0.0,    0.0,   0.0,   0.0,
+                               0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.025, 0.0,   0.0,   0.0,   0.0,   0.0,    0.0,   0.0,   0.0,
+                               0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.025, 0.0,   0.0,   0.0,   0.0,    0.0,   0.0,   0.0,
+                               0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.04,  0.0,   0.0,   0.0,    0.0,   0.0,   0.0,
+                               0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.01,  0.0,   0.0,    0.0,   0.0,   0.0,
+                               0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.01,  0.0,    0.0,   0.0,   0.0,
+                               0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.01,   0.0,   0.0,   0.0,
+                               0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,    0.01,  0.0,   0.0,
+                               0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,    0.0,   0.01,  0.0,
+                               0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,    0.0,   0.0,   0.015]
+    # vyaw(11,11) = 0.01: 이전 0.0001은 IMU를 과도하게 신뢰 → gyro scale 오류가 EKF yaw를 지배
+    # 0.01로 높여 wheel encoder vyaw와 균형 맞춤 (gyro scale 보정 후 다시 낮출 수 있음)
+    # ax(12,12) = 0.01: 가속도는 상대적으로 노이즈 허용
+
+    # ============================================================
+    # Initial Estimate Covariance
+    # ============================================================
+    initial_estimate_covariance: [1e-9, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                 0.0, 1e-9, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                 0.0, 0.0, 1e-9, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                 0.0, 0.0, 0.0, 1e-9, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                 0.0, 0.0, 0.0, 0.0, 1e-9, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                 0.0, 0.0, 0.0, 0.0, 0.0, 1e-9, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1e-9, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1e-9, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1e-9, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1e-9, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1e-9, 0.0, 0.0, 0.0, 0.0,
+                                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1e-9, 0.0, 0.0, 0.0,
+                                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1e-9, 0.0, 0.0,
+                                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1e-9, 0.0,
+                                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1e-9]
+
+    use_sim_time: false
+    use_control: false
+    
+    # 디버그 (필요시 활성화)
+    debug: false
+    debug_out_file: /tmp/ekf_vslam_fusion_debug.txt

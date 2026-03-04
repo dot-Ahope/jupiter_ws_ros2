@@ -144,13 +144,22 @@
     </collision>
   </link>
   
-  <joint name="laser_joint" type="fixed">
+
+  <!-- velodyne 라이다 쓸 때 이걸로.
+    <joint name="laser_joint" type="fixed">
+      <parent link="base_link"/>
+      <child link="laser"/>
+      <origin xyz="-0.03 0 0.13" rpy="0 0 0"/>
+    </joint>
+  -->
+
+    <joint name="laser_joint" type="fixed">
     <parent link="base_link"/>
     <child link="laser"/>
     <!-- 라이다 후방 설치: 물리적 위치와 방향 정의
          yaw=180° (π): 라이다 프레임이 로봇 후방(-X)을 향함
          TF가 laser 프레임 → base_link 변환을 자동 처리 -->
-    <origin xyz="-0.03 0 0.13" rpy="0 0 0"/>
+    <origin xyz="-0.03 0 0.13" rpy="0 0 3.14159"/>
   </joint>
   
   <!-- IMU 센서 (시각적으로 표시하지 않음) -->
@@ -176,9 +185,9 @@
   <link name="camera_link">
     <inertial>
       <!-- 소형 카메라의 정확한 관성 파라미터 -->
-      <!-- 크기: 3cm x 8cm x 3cm, 질량: 0.03kg -->
+      <!-- 크기: 9cm(y축방향) x 2.58cm(x축방향) x 2.5cm(z축방향), 질량: 0.07kg (RealSense급) -->
       <origin xyz="0 0 0" rpy="0 0 0"/>
-      <mass value="0.03"/>
+      <mass value="0.07"/>
       <inertia ixx="0.0000063" ixy="0" ixz="0" 
                iyy="0.0000030" iyz="0" 
                izz="0.0000063"/>
@@ -187,7 +196,8 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <box size="0.03 0.08 0.03"/>
+        <!-- Size: Depth(X)=0.0258, Length(Y)=0.09, Height(Z)=0.025 -->
+        <box size="0.0258 0.09 0.025"/>
       </geometry>
       <material name="red">
         <color rgba="0.8 0 0 0.8"/>
@@ -197,7 +207,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <box size="0.03 0.08 0.03"/>
+        <box size="0.0258 0.09 0.025"/>
       </geometry>
     </collision>
   </link>
@@ -205,7 +215,8 @@
   <joint name="camera_joint" type="fixed">
     <parent link="base_link"/>
     <child link="camera_link"/>
-    <origin xyz="0.08 0 0.10403" rpy="0 0 -0.05"/>
+    <!-- 사용자 측정값: X=27.4cm(0.274), Z=5.5cm(0.055) -->
+    <origin xyz="0.274 0 0.055" rpy="0 0 0"/>
   </joint>
   
 </robot>

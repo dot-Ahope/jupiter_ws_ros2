@@ -1,8 +1,8 @@
 /**:
   ros__parameters:
-    Kp: 0.0 #0.1           # Proportional gain set to 0.0 for PWM mapping
-    Ki: 0.0 #0.3           # Integral gain set to 0.0 for PWM mapping
-    Kd: 0.0 #0.05           # Derivative gain set to 0.0 for PWM mapping
+    Kp: 0.8 #0.1           # Proportional gain set to 0.0 for PWM mapping
+    Ki: 0.06 #0.3           # Integral gain set to 0.0 for PWM mapping
+    Kd: 0.5 #0.05           # Derivative gain set to 0.0 for PWM mapping
     linear_max: 1.0   # Maximum linear speed (0.0 ~ 0.45) - Increased for headroom
     angular_max: 2.0  # Maximum angular speed (0.0 ~ 2.0) - Increased for headroom
     linear_min: 0.0   # Minimum linear speed (0.0 ~ 0.45)
