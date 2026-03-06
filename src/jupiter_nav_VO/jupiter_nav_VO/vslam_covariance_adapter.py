@@ -414,19 +414,22 @@ class VslamCovarianceAdapter(Node):
         # 2) Anomaly detection (항상 수행)
         is_anomaly = self._check_anomaly(msg)
 
-        # frozen을 anomaly로 취급 (tracking 상태 관리에 반영)
-        effective_anomaly = is_anomaly or is_frozen
+        # 3) Tracking 상태 관리 (anomaly만 반영, frozen은 별도 처리)
+        #    frozen은 "정지 상태"와 "추적 실패 stale data"를 구분할 수 없으므로
+        #    tracking 복구 판정(consecutive_good)을 방해하지 않도록 분리.
+        #    → frozen일 때: 메시지는 발행하지 않되, tracking 상태는 anomaly만으로 판단
+        self._update_tracking_state(is_anomaly)
 
-        # 3) Tracking 상태 관리
-        self._update_tracking_state(effective_anomaly)
+        # 4) 게이팅 판정: frozen이면 무조건 gate (중복 데이터 EKF 투입 방지)
+        if is_frozen:
+            self.gated_count += 1
+            self.frozen_gated_count += 1
+            return
 
-        # 4) 게이팅 판정
         if not self.tracking_ok:
             self.gated_count += 1
             if is_anomaly:
                 self.anomaly_gated_count += 1
-            if is_frozen:
-                self.frozen_gated_count += 1
             if self.vo_state_available and self.vo_state != self.good_vo_state:
                 self.vo_state_gated_count += 1
             return

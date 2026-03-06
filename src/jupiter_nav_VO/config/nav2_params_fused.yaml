@@ -104,15 +104,15 @@ controller_server:
     # 정지 상태에서 순수 회전(vx=0, vθ≠0) 시 양쪽 바퀴가 반대 방향으로
     # 정지마찰을 동시에 극복해야 하므로, DWB의 낮은 angular.z 출력으로는
     # 모터가 응답하지 못함 (데드존). RotationShimController가 정지 회전을
-    # 고정 속도(0.5 rad/s)로 처리한 후, DWB에 전달.
+    # 고정 속도(0.8 rad/s)로 처리한 후, DWB에 전달.
     # ==============================================================
     FollowPath:
       plugin: "nav2_rotation_shim_controller::RotationShimController"
       primary_controller: "dwb_core::DWBLocalPlanner"
       angular_dist_threshold: 0.785      # 45° — 경로 방향과 헤딩 차이가 이 이상이면 제자리 회전
       forward_sampling_distance: 0.5     # 경로 앞쪽 0.5m 지점으로 방향 계산
-      rotate_to_heading_angular_vel: 0.5 # ⭐ 정지 회전 고정 속도 — 모터 데드존(~0.15) 확실히 초과
-      max_angular_accel: 1.6             # 회전 가속도 제한
+      rotate_to_heading_angular_vel: 0.8 # ⭐ 정지 회전 고정 속도 — 0.5에서 실패(5차 테스트: 실제 0.05~0.18만 달성). 0.8로 상향
+      max_angular_accel: 5.0             # ⭐ 1.6→5.0: 가속 리미터=actual_vel+accel*dt, 1.6일 때 actual 0.3이면 cmd 0.46 한계→0.8 미도달. 5.0이면 actual 0.3→cmd 0.8 즉시 도달
       simulate_ahead_time: 1.0           # 충돌 검사 시뮬레이션 시간
 
       # DWB 파라미터 (primary_controller)
@@ -137,7 +137,7 @@ controller_server:
       sim_time: 1.5
       linear_granularity: 0.05
       angular_granularity: 0.025
-      transform_tolerance: 3.0           # ⭐ PC-Jetson 시계 차이 ~2.4s 허용
+      transform_tolerance: 0.5           # stamp=Time(0,0) + NTP chrony 적용 후 축소 (3.0→0.5)
       xy_goal_tolerance: 0.25          # RotateToGoal 활성 영역 확대 — 회전 중 드리프트로 토글 방지
       trans_stopped_velocity: 0.05        # 정지 판정
       short_circuit_trajectory_evaluation: True
@@ -165,7 +165,7 @@ planner_server:
   ros__parameters:
     expected_planner_frequency: 5.0     # Jetson CPU 부하 고려
     use_sim_time: False
-    transform_tolerance: 3.0            # ⭐ PC-Jetson 시계 차이(~2.4s) 허용 (기본 0.3 → 3.0)
+    transform_tolerance: 0.5            # stamp=Time(0,0) + NTP chrony 적용 후 축소 (3.0→0.5)
     planner_plugins: ["GridBased"]
     GridBased:
       plugin: "nav2_navfn_planner/NavfnPlanner"
@@ -191,7 +191,7 @@ behavior_server:
       plugin: "nav2_behaviors/Wait"
     global_frame: odom
     robot_base_frame: base_footprint
-    transform_tolerance: 3.0            # ⭐ 0.1 → 3.0 (PC-Jetson 시계 차이 허용)
+    transform_tolerance: 0.5            # stamp=Time(0,0) + NTP chrony 적용 후 축소 (3.0→0.5)
     simulate_ahead_time: 2.0
     max_rotational_vel: 0.8
     min_rotational_vel: 0.15
@@ -215,7 +215,7 @@ local_costmap:
       width: 3
       height: 3
       resolution: 0.05
-      transform_tolerance: 3.0          # ⭐ PC-Jetson 시계 차이(~2.4s) 허용
+      transform_tolerance: 0.5          # stamp=Time(0,0) + NTP chrony 적용 후 축소 (3.0→0.5)
       # Jupiter footprint (360mm × 245mm)
       footprint: "[ [0.18, 0.1225], [0.18, -0.1225], [-0.18, -0.1225], [-0.18, 0.1225] ]"
       plugins: ["obstacle_layer", "inflation_layer"]
@@ -254,7 +254,7 @@ global_costmap:
       global_frame: map
       robot_base_frame: base_footprint
       use_sim_time: False
-      transform_tolerance: 3.0          # ⭐ PC-Jetson 시계 차이(~2.4s) 허용
+      transform_tolerance: 0.5          # stamp=Time(0,0) + NTP chrony 적용 후 축소 (3.0→0.5)
       footprint: "[ [0.18, 0.1225], [0.18, -0.1225], [-0.18, -0.1225], [-0.18, 0.1225] ]"
       resolution: 0.05
       track_unknown_space: true
