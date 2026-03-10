@@ -865,11 +865,9 @@ bool CLaserOdometry2D::filterLevelSolution()
 
   kai_loc_sub(0) = -fps*acu_trans(0,2);
   kai_loc_sub(1) = -fps*acu_trans(1,2);
-  if (acu_trans(0,0) > 1.f)
-    kai_loc_sub(2) = 0.f;
-  else
   {
-    kai_loc_sub(2) = -fps*std::acos(acu_trans(0,0))*rf2o::sign(acu_trans(1,0));
+    const float clamped = std::clamp(acu_trans(0,0), -1.f, 1.f);
+    kai_loc_sub(2) = -fps*std::acos(clamped)*rf2o::sign(acu_trans(1,0));
   }
   kai_loc_sub += kai_loc_old_;
 
@@ -928,12 +926,9 @@ void CLaserOdometry2D::PoseUpdate()
   //--------------------------------------------------------
   kai_loc_(0) = fps*acu_trans(0,2);
   kai_loc_(1) = fps*acu_trans(1,2);
-
-  if (acu_trans(0,0) > 1.f)
-    kai_loc_(2) = 0.f;
-  else
   {
-    kai_loc_(2) = fps*std::acos(acu_trans(0,0))*rf2o::sign(acu_trans(1,0));
+    const float clamped = std::clamp(acu_trans(0,0), -1.f, 1.f);
+    kai_loc_(2) = fps*std::acos(clamped)*rf2o::sign(acu_trans(1,0));
   }
 
   //cout << endl << "Arc cos (incr tita): " << kai_loc_(2);

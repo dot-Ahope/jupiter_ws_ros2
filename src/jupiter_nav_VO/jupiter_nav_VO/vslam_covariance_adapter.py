@@ -85,11 +85,13 @@ class VslamCovarianceAdapter(Node):
         self.declare_parameter('max_pos_delta', 0.5)            # m 스텝당 최대 위치 변화
         self.declare_parameter('good_count_threshold', 30)      # 연속 정상 횟수 → tracking 복구 판정
 
-        # Frozen data detection (2026-03-04)
+        # Frozen data detection (2026-03-04, 2026-03-09 downsampling 추가)
         # cuVSLAM이 tracking lost 시 마지막 pose를 계속 발행하는 경우 감지
+        # 정지 상태에서도 frozen 판정되므로, 완전 차단 대신 저주파 발행(downsample)
         self.declare_parameter('frozen_threshold', 10)           # 연속 동일 pose 횟수 → frozen 판정
         self.declare_parameter('frozen_pos_tolerance', 1e-6)    # m - 위치 변화 없음 판정 기준
         self.declare_parameter('frozen_yaw_tolerance', 1e-6)    # rad - yaw 변화 없음 판정 기준
+        self.declare_parameter('frozen_publish_rate', 1.0)      # Hz - frozen 상태에서 발행 주파수 (0=완전차단)
 
         # 공통 복구 파라미터
         self.declare_parameter('recovery_delay', 1.0)           # 복구 후 대기 시간 (초)
@@ -118,6 +120,7 @@ class VslamCovarianceAdapter(Node):
         self.frozen_threshold = self.get_parameter('frozen_threshold').value
         self.frozen_pos_tolerance = self.get_parameter('frozen_pos_tolerance').value
         self.frozen_yaw_tolerance = self.get_parameter('frozen_yaw_tolerance').value
+        self.frozen_publish_rate = self.get_parameter('frozen_publish_rate').value
 
         # 6x6 공분산 행렬의 대각 인덱스
         self.pose_diag_indices = [0, 7, 14, 21, 28, 35]
@@ -138,14 +141,17 @@ class VslamCovarianceAdapter(Node):
         self.prev_odom = None           # 이전 odom 메시지 (pose)
         self.anomaly_detected = False   # 현재 anomaly 상태
         self.consecutive_good = 0       # 연속 정상 메시지 수
+        self.consecutive_anomaly = 0    # 연속 anomaly 메시지 수 (진단용)
         self.tracking_ok = False        # 최종 판정: 발행 허용 여부
         self.tracking_recovered_time = None
 
         # ============================================================
-        # Frozen data detection 상태 (2026-03-04)
+        # Frozen data detection 상태 (2026-03-04, 2026-03-09 downsampling)
         # ============================================================
         self.frozen_count = 0           # 연속 동일 pose 메시지 수
         self.frozen_gated_count = 0     # frozen으로 gate된 총 횟수
+        self.frozen_published_count = 0 # frozen 상태에서 downsample 발행된 횟수
+        self.last_frozen_publish_time = 0.0  # 마지막 frozen downsample 발행 시각
 
         # ============================================================
         # vo_state 상태 (선택적)
@@ -188,7 +194,8 @@ class VslamCovarianceAdapter(Node):
             f'max_pos_delta={self.max_pos_delta}m, '
             f'good_count_threshold={self.good_count_threshold}\n'
             f'  frozen detection: threshold={self.frozen_threshold} msgs, '
-            f'pos_tol={self.frozen_pos_tolerance}m, yaw_tol={self.frozen_yaw_tolerance}rad\n'
+            f'pos_tol={self.frozen_pos_tolerance}m, yaw_tol={self.frozen_yaw_tolerance}rad, '
+            f'downsample={self.frozen_publish_rate}Hz\n'
             f'  recovery: delay={self.recovery_delay}s, '
             f'cov_multiplier={self.recovery_cov_multiplier}x, '
             f'decay_time={self.recovery_cov_decay_time}s\n'
@@ -315,7 +322,7 @@ class VslamCovarianceAdapter(Node):
         dy = pose.position.y - self.prev_odom.position.y
         pos_delta = math.sqrt(dx * dx + dy * dy)
 
-        # 기준점 업데이트 (anomaly가 아닌 경우에만)
+        # 기준점 업데이트 + anomaly 판정
         is_anomaly = False
 
         if yaw_delta > self.max_yaw_delta:
@@ -334,6 +341,10 @@ class VslamCovarianceAdapter(Node):
                     f'> {self.max_pos_delta}m threshold'
                 )
 
+        # prev_odom 업데이트: 정상 시에만 (2026-03-10 재수정)
+        # anomaly 시 prev_odom을 유지 → 나쁜 위치가 기준점이 되는 것을 방지
+        # VSLAM이 정상 위치로 복귀하면 delta가 자연히 작아져 lock-out 해제
+        # (이전 "항상 업데이트" 수정은 -50m drift 허용 버그 유발 → 원복)
         if not is_anomaly:
             self.prev_odom = pose
 
@@ -347,6 +358,7 @@ class VslamCovarianceAdapter(Node):
         now = time.monotonic()
 
         if is_anomaly:
+            self.consecutive_anomaly += 1
             if self.tracking_ok or self.consecutive_good > 0:
                 if self.tracking_ok:
                     self.get_logger().warn('VSLAM tracking LOST (anomaly detected). Gating.')
@@ -354,7 +366,15 @@ class VslamCovarianceAdapter(Node):
                 self.tracking_recovered_time = None
             self.consecutive_good = 0
             self.anomaly_detected = True
+            # 연속 anomaly 경고 (5초 = ~300 frames @60Hz)
+            if self.consecutive_anomaly == 300:
+                self.get_logger().error(
+                    f'VSLAM appears PERMANENTLY LOST '
+                    f'({self.consecutive_anomaly} consecutive anomalies). '
+                    f'VSLAM data is being fully gated to protect EKF.'
+                )
         else:
+            self.consecutive_anomaly = 0  # 정상 메시지 수신 시 리셋
             if self.anomaly_detected:
                 self.consecutive_good += 1
                 if self.consecutive_good >= self.good_count_threshold:
@@ -420,11 +440,27 @@ class VslamCovarianceAdapter(Node):
         #    → frozen일 때: 메시지는 발행하지 않되, tracking 상태는 anomaly만으로 판단
         self._update_tracking_state(is_anomaly)
 
-        # 4) 게이팅 판정: frozen이면 무조건 gate (중복 데이터 EKF 투입 방지)
+        # 4) 게이팅 판정: frozen이면 downsample (중복 데이터 EKF 과투입 방지)
+        #    완전 차단 시 Foxglove 데이터 없음 + EKF에 VSLAM 위치 전달 중단
+        #    → frozen_publish_rate(기본 1Hz)로 저주파 발행
         if is_frozen:
-            self.gated_count += 1
-            self.frozen_gated_count += 1
-            return
+            now_sec = time.monotonic()
+            if self.frozen_publish_rate > 0:
+                interval = 1.0 / self.frozen_publish_rate
+                if (now_sec - self.last_frozen_publish_time) >= interval:
+                    self.last_frozen_publish_time = now_sec
+                    self.frozen_published_count += 1
+                    # frozen downsample: 공분산 보정 후 발행 (아래로 진행)
+                    pass  # fall through to covariance correction and publish
+                else:
+                    self.gated_count += 1
+                    self.frozen_gated_count += 1
+                    return
+            else:
+                # frozen_publish_rate=0: 완전 차단 (이전 동작)
+                self.gated_count += 1
+                self.frozen_gated_count += 1
+                return
 
         if not self.tracking_ok:
             self.gated_count += 1
@@ -482,9 +518,11 @@ class VslamCovarianceAdapter(Node):
                 f'pub={self.published_count} ({pub_pct:.0f}%) | '
                 f'gated={self.gated_count} ({gate_pct:.0f}%) '
                 f'[anomaly={self.anomaly_gated_count}, frozen={self.frozen_gated_count}, '
+                f'frozen_pub={self.frozen_published_count}, '
                 f'vo_state={self.vo_state_gated_count}] | '
                 f'zero_cov: pose={self.zero_pose_cov_count}, twist={self.zero_twist_cov_count} | '
                 f'tracking_ok={self.tracking_ok} frozen_count={self.frozen_count} '
+                f'consec_anomaly={self.consecutive_anomaly} '
                 f'vo_state={self.vo_state if self.vo_state_available else "N/A"} '
                 f'cov_mult={cov_mult:.1f}x'
             )

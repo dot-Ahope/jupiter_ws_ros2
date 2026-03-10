@@ -147,13 +147,17 @@ ekf_filter_node:
     #   약점: 긴 복도/대칭 환경에서 drift, 10Hz 제한, 제자리 회전 시 yaw 부정확
     # ============================================================
     odom2: /odom_rf2o_adapted
-    odom2_config: [true,  true,  false,    # x, y, z ← 절대 위치
+    odom2_config: [true,  true,  false,    # x, y, z ← differential 모드로 상대 변위
                    false, false, false,    # roll, pitch, yaw ← 제거 (회전 시 스캔매칭 실패)
                    false, false, false,    # vx, vy, vz (위치로 추정)
                    false, false, false,    # vroll, vpitch, vyaw
                    false, false, false]    # ax, ay, az
 
-    odom2_differential: false   # 절대 위치 사용 (RF2O 자체 적분값)
+    # 2026-03-10: absolute → differential 전환
+    # 원인: RF2O 스캔 매칭 누적 drift가 EKF 절대 위치를 오염 (정지 중 22.5m 발산)
+    # 해결: differential 모드에서는 frame-to-frame 상대 변위만 사용
+    #       odom frame drift는 SLAM Toolbox map→odom TF가 보정 (표준 접근)
+    odom2_differential: true
     odom2_relative: false
     odom2_queue_size: 10
     

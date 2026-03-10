@@ -19,6 +19,7 @@
 #define CLaserOdometry2D_H
 
 // std header
+#include <algorithm>
 #include <iostream>
 #include <fstream>
 #include <numeric>
