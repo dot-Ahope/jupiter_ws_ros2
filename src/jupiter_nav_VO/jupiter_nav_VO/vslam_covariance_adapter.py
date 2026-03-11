@@ -85,6 +85,14 @@ class VslamCovarianceAdapter(Node):
         self.declare_parameter('max_pos_delta', 0.5)            # m 스텝당 최대 위치 변화
         self.declare_parameter('good_count_threshold', 30)      # 연속 정상 횟수 → tracking 복구 판정
 
+        # Anomaly auto-recovery (2026-03-11)
+        # VSLAM 텔레포트 후 새 위치에서 안정적 추적 시 baseline 리셋하여 lock-out 해제
+        # EKF는 VSLAM을 differential 모드로 사용하므로 절대 위치 변화는 무관,
+        # 프레임간 delta가 정확하면 리셋 후 정상 기여 가능
+        self.declare_parameter('anomaly_reset_count', 300)          # 연속 anomaly 후 리셋 검토 (~5s @60Hz)
+        self.declare_parameter('stable_interframe_threshold', 0.05) # m - 프레임간 안정 판정 기준
+        self.declare_parameter('stable_interframe_count', 120)      # 연속 안정 프레임 → 리셋 실행 (~2s @60Hz)
+
         # Frozen data detection (2026-03-04, 2026-03-09 downsampling 추가)
         # cuVSLAM이 tracking lost 시 마지막 pose를 계속 발행하는 경우 감지
         # 정지 상태에서도 frozen 판정되므로, 완전 차단 대신 저주파 발행(downsample)
@@ -117,6 +125,9 @@ class VslamCovarianceAdapter(Node):
         self.recovery_delay = self.get_parameter('recovery_delay').value
         self.recovery_cov_multiplier = self.get_parameter('recovery_cov_multiplier').value
         self.recovery_cov_decay_time = self.get_parameter('recovery_cov_decay_time').value
+        self.anomaly_reset_count = self.get_parameter('anomaly_reset_count').value
+        self.stable_interframe_threshold = self.get_parameter('stable_interframe_threshold').value
+        self.stable_interframe_count = self.get_parameter('stable_interframe_count').value
         self.frozen_threshold = self.get_parameter('frozen_threshold').value
         self.frozen_pos_tolerance = self.get_parameter('frozen_pos_tolerance').value
         self.frozen_yaw_tolerance = self.get_parameter('frozen_yaw_tolerance').value
@@ -142,6 +153,9 @@ class VslamCovarianceAdapter(Node):
         self.anomaly_detected = False   # 현재 anomaly 상태
         self.consecutive_good = 0       # 연속 정상 메시지 수
         self.consecutive_anomaly = 0    # 연속 anomaly 메시지 수 (진단용)
+        self.last_raw_pose = None       # 항상 업데이트되는 최신 VSLAM pose (auto-recovery용)
+        self.stable_interframe_counter = 0  # anomaly 중 연속 안정 inter-frame 수
+        self.auto_recovery_count = 0    # auto-recovery 발생 횟수 (통계)
         self.tracking_ok = False        # 최종 판정: 발행 허용 여부
         self.tracking_recovered_time = None
 
@@ -199,6 +213,9 @@ class VslamCovarianceAdapter(Node):
             f'  recovery: delay={self.recovery_delay}s, '
             f'cov_multiplier={self.recovery_cov_multiplier}x, '
             f'decay_time={self.recovery_cov_decay_time}s\n'
+            f'  auto-recovery: reset_after={self.anomaly_reset_count} anomalies, '
+            f'stable_threshold={self.stable_interframe_threshold}m, '
+            f'stable_count={self.stable_interframe_count}\n'
             f'  vo_state: {vo_str}'
         )
 
@@ -348,6 +365,20 @@ class VslamCovarianceAdapter(Node):
         if not is_anomaly:
             self.prev_odom = pose
 
+        # Auto-recovery: 항상 inter-frame delta 추적 (anomaly 상태에서도)
+        # VSLAM이 텔레포트 후에도 안정적으로 추적 중인지 판단 근거
+        if self.last_raw_pose is not None:
+            raw_dx = pose.position.x - self.last_raw_pose.position.x
+            raw_dy = pose.position.y - self.last_raw_pose.position.y
+            raw_delta = math.sqrt(raw_dx * raw_dx + raw_dy * raw_dy)
+            if raw_delta < self.stable_interframe_threshold:
+                self.stable_interframe_counter += 1
+            else:
+                self.stable_interframe_counter = 0
+        else:
+            self.stable_interframe_counter = 0
+        self.last_raw_pose = pose
+
         return is_anomaly
 
     def _update_tracking_state(self, is_anomaly: bool):
@@ -373,6 +404,27 @@ class VslamCovarianceAdapter(Node):
                     f'({self.consecutive_anomaly} consecutive anomalies). '
                     f'VSLAM data is being fully gated to protect EKF.'
                 )
+            # Auto-recovery: 텔레포트 후 안정적 추적 시 baseline 리셋 (2026-03-11)
+            # 조건: (1) 충분히 오래 anomaly 상태 (2) inter-frame delta가 안정적
+            # EKF differential 모드에서는 절대 위치 무관, 정확한 delta만 중요
+            if (self.consecutive_anomaly >= self.anomaly_reset_count and
+                    self.stable_interframe_counter >= self.stable_interframe_count):
+                self.auto_recovery_count += 1
+                self.get_logger().warn(
+                    f'VSLAM auto-recovery #{self.auto_recovery_count}: '
+                    f'stable tracking at new position '
+                    f'({self.consecutive_anomaly} anomalies, '
+                    f'{self.stable_interframe_counter} stable interframes). '
+                    f'Resetting baseline.'
+                )
+                self.prev_odom = self.last_raw_pose
+                self.consecutive_anomaly = 0
+                self.stable_interframe_counter = 0
+                self.anomaly_detected = False
+                self.tracking_recovered_time = now
+                self.tracking_ok = False  # recovery_delay 대기 후 발행 재개
+                self.consecutive_good = 0
+                return  # 이번 프레임은 gating 유지, 다음부터 새 baseline 판정
         else:
             self.consecutive_anomaly = 0  # 정상 메시지 수신 시 리셋
             if self.anomaly_detected:
@@ -523,6 +575,8 @@ class VslamCovarianceAdapter(Node):
                 f'zero_cov: pose={self.zero_pose_cov_count}, twist={self.zero_twist_cov_count} | '
                 f'tracking_ok={self.tracking_ok} frozen_count={self.frozen_count} '
                 f'consec_anomaly={self.consecutive_anomaly} '
+                f'stable_if={self.stable_interframe_counter} '
+                f'auto_recov={self.auto_recovery_count} '
                 f'vo_state={self.vo_state if self.vo_state_available else "N/A"} '
                 f'cov_mult={cov_mult:.1f}x'
             )

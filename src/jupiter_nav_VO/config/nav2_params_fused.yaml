@@ -82,21 +82,21 @@ controller_server:
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.05  # 미세 회전 허용 (이전 0.15)
-    failure_tolerance: 0.3
+    failure_tolerance: 3.0              # ⭐ 0.3→3.0 (inflated zone에서 DWB 일시 실패 허용, 30 cycles @10Hz)
     progress_checker_plugin: "progress_checker"
     goal_checker_plugins: ["general_goal_checker"]
     controller_plugins: ["FollowPath"]
 
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
-      required_movement_radius: 0.10    # ⭐ 0.5→0.1 (제자리 회전 시 progress 판정 실패 방지)
-      movement_time_allowance: 15.0     # ⭐ 10→15s (회전 정렬에 충분한 시간 확보)
+      required_movement_radius: 0.03    # ⭐ 0.1→0.03 (제자리 회전 시 ~3cm drift로 progress 판정 통과)
+      movement_time_allowance: 20.0     # ⭐ 15→20s (inflated corridor 통과 + 최종 회전에 충분한 시간)
 
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.15          # ⭐ 0.10→0.15 (DWB xy_tol=0.25 보다 좁아야 함)
-      yaw_goal_tolerance: 0.35          # ⭐ 0.25→0.35 (~20°, RotateToGoal 오버슛 허용)
+      xy_goal_tolerance: 0.20          # ⭐ 0.15→0.20 (DWB xy_tol=0.25 보다 좁아야 함, 여유 확보)
+      yaw_goal_tolerance: 0.50          # ⭐ 0.35→0.50 (~29°, 최종 회전 요구 완화 → ABORTED 방지)
 
     # ==============================================================
     # RotationShimController → DWB 래핑
@@ -237,8 +237,8 @@ local_costmap:
           inf_is_valid: False
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.0
-        inflation_radius: 0.35        # 로봇 반경(~0.22m) + 안전거리
+        cost_scaling_factor: 5.0        # ⭐ 3.0→5.0 (inflation decay 가속 → 유효 inflation 폭 축소)
+        inflation_radius: 0.30          # ⭐ 0.35→0.30 (inscribed 0.12m + 0.18m 안전여유)
 
 # ==============================================================
 # Global Costmap
@@ -282,8 +282,8 @@ global_costmap:
           inf_is_valid: False
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.0
-        inflation_radius: 0.35
+        cost_scaling_factor: 5.0        # ⭐ 3.0→5.0 (local과 동일 — inflation decay 가속)
+        inflation_radius: 0.30          # ⭐ 0.35→0.30 (local과 동일)
 
 # ==============================================================
 # Waypoint Follower
