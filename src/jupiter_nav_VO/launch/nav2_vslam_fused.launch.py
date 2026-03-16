@@ -142,7 +142,13 @@ def generate_launch_description():
         executable='jupiter_driver_compensated',
         name='jupiter_driver',
         output='screen',
-        parameters=[driver_params],
+        parameters=[driver_params, {
+            # 2026-03-16: Direction D — IMU 자이로 스케일 보정
+            # 180° 회전 테스트에서 IMU 자이로가 ~2.3% 과소측정 확인
+            # → 회전 후 EKF yaw 오차 -3.91° → 직진 시 7cm/m 좌측편향
+            # gyro_scale 1.025로 보정하여 과소측정 보상
+            'imu_gyro_scale': 1.025,
+        }],
         remappings=[
             ('/imu', '/jupiter/imu'),
             ('/vel', '/jupiter/get_vel')
@@ -251,6 +257,13 @@ def generate_launch_description():
             'max_yaw_delta': 0.15,           # rad (~8.6°) 스텝당 최대 yaw 변화
             'max_pos_delta': 0.5,            # m 스텝당 최대 위치 변화
             'good_count_threshold': 30,      # 연속 30회 정상 → tracking 복구 판정
+            # Frozen data detection (2026-03-16 조정)
+            # cuVSLAM은 ~60Hz 발행하지만 실제 새 pose는 ~10-15Hz
+            # 나머지는 이전 값 반복 → frozen_threshold=10이면 0.17초 만에 frozen
+            # → EKF가 VSLAM 보정을 거의 받지 못함 → 회전 시 yaw 발산
+            'frozen_threshold': 60,          # 60Hz × 1초 = 60 연속 동일 후 frozen 판정
+            'frozen_publish_rate': 10.0,     # frozen 시에도 10Hz로 발행 (기존 1Hz)
+            'frozen_pos_tolerance': 1e-6,    # m - 위치 변화 없음 판정 기준
             # 공통 복구 파라미터
             'recovery_delay': 1.0,           # tracking 복구 후 1초 대기
             'recovery_cov_multiplier': 5.0,  # 복구 직후 공분산 5배 증폭
@@ -305,18 +318,20 @@ def generate_launch_description():
     )
     
     # ============================================================
-    # 10. RF2O Covariance Adapter (최소 공분산 부여)
+    # 10. RF2O Rotation-Aware Covariance Adapter (동적 공분산)
     # ============================================================
     # RF2O는 pose/twist covariance를 모두 0으로 발행함
     # → EKF가 RF2O를 무한 신뢰하여 발산 위험
-    # → vslam_covariance_adapter 재사용하여 최소 공분산 부여
+    # 2026-03-16: Direction D — 회전 인식 동적 공분산 적용
+    #   - 직진 시: 기본 공분산 0.5 m² (RF2O 약한 기여)
+    #   - 회전 시: 공분산 ×20 = 10.0 m² (RF2O 사실상 무시)
+    #   - 전환 시: 1초 exponential decay (EKF 점프 방지)
+    # 이유: 제자리 회전 시 RF2O 스캔매칭이 부정확 → noisy x,y가 EKF 오염
+    #       → 회전 중 RF2O 영향력 억제, 직진 시 정상 복귀
     # /odom_rf2o → /odom_rf2o_adapted
-    # 주의: anomaly detection은 RF2O에 부적합 (VSLAM 전용 설계)
-    #       → max_yaw_delta/max_pos_delta를 큰 값으로 설정하여 사실상 비활성
-    # respawn=True: RF2O 노드 재시작 시 adapter도 함께 유지 (2026-03-04)
     rf2o_covariance_adapter = Node(
         package='jupiter_nav_VO',
-        executable='vslam_covariance_adapter',
+        executable='rf2o_covariance_adapter',
         name='rf2o_covariance_adapter',
         output='screen',
         respawn=True,
@@ -324,14 +339,15 @@ def generate_launch_description():
         parameters=[{
             'input_topic': '/odom_rf2o',
             'output_topic': '/odom_rf2o_adapted',
-            'min_position_cov': 0.1,         # m² - RF2O 위치 불확실성 (VSLAM보다 높음)
-            'min_orientation_cov': 0.05,      # rad² - RF2O 방향 불확실성
-            'min_linear_vel_cov': 0.01,       # (m/s)² - RF2O 선속도 불확실성
-            'min_angular_vel_cov': 0.01,      # (rad/s)² - RF2O 각속도 불확실성
-            'clamp_existing': True,
-            'enable_vo_state_gating': False,   # RF2O에는 vo_state 없음
-            'max_yaw_delta': 99.0,            # anomaly detection 사실상 비활성
-            'max_pos_delta': 99.0,            # RF2O는 자체 필터링으로 충분
+            'position_cov_base': 0.5,          # m² - 직진 시 pose cov (Direction C 값 유지)
+            'orientation_cov_base': 0.05,       # rad² - RF2O 방향 불확실성
+            'linear_vel_cov_base': 0.01,        # (m/s)² - RF2O 선속도 불확실성
+            'angular_vel_cov_base': 0.01,       # (rad/s)² - RF2O 각속도 불확실성
+            'rotation_threshold': 0.15,         # rad/s - 회전 감지 임계값
+            'rotation_multiplier': 20.0,        # 회전 중 공분산 배수 (pos 0.5→10.0)
+            'rotation_orient_multiplier': 5.0,  # 회전 중 orientation 공분산 배수
+            'transition_decay_time': 1.0,       # 초 - 회전→직진 전환 시간
+            'cmd_vel_timeout': 0.5,             # 초 - cmd_vel 타임아웃
         }]
     )
 

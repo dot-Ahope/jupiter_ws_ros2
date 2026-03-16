@@ -114,7 +114,7 @@ ekf_filter_node:
     odom1_config: [true,  true,  false,    # x, y, z ← 위치 (z 제외: 2D 모드)
                    false, false, false,    # roll, pitch, yaw ← 제거 (회전 중 ±21° 오차)
                    true,  true,  false,    # vx, vy, vz ← 속도
-                   false, false, false,    # vroll, vpitch, vyaw ← 제거 (회전 중 오차)
+                   false, false, false,    # vroll, vpitch, vyaw ← 2026-03-13: vyaw 재활성화 실패 → 다시 제거 (EKF 발산)
                    false, false, false]    # ax, ay, az
 
     odom1_differential: true    # 중요: 절대 위치가 아닌 상대 변위 사용
@@ -124,7 +124,7 @@ ekf_filter_node:
     # VSLAM 측정 거부 임계값 (Mahalanobis distance)
     # VSLAM은 가끔 큰 점프를 발행할 수 있으므로 아웃라이어 거부 필요
     odom1_pose_rejection_threshold: 5.0    # 위치 아웃라이어 거부
-    odom1_twist_rejection_threshold: 3.0   # 속도 아웃라이어 거부
+    odom1_twist_rejection_threshold: 3.0   # 2026-03-13: 원래 값 복원 (vyaw 비활성 상태에서 불필요)
 
     # ============================================================
     # odom2: RF2O LiDAR Odometry (절대 위치)
@@ -147,9 +147,14 @@ ekf_filter_node:
     #   약점: 긴 복도/대칭 환경에서 drift, 10Hz 제한, 제자리 회전 시 yaw 부정확
     # ============================================================
     odom2: /odom_rf2o_adapted
-    odom2_config: [true,  true,  false,    # x, y, z ← differential 모드로 상대 변위
-                   false, false, false,    # roll, pitch, yaw ← 제거 (회전 시 스캔매칭 실패)
-                   false, false, false,    # vx, vy, vz (위치로 추정)
+    # 2026-03-13: Direction C — RF2O x,y 재활성화 + 공분산 5배 증가
+    # 배경: Direction B(RF2O OFF)에서 전진 좌측편향 해소되었으나
+    #       180° 회전 시 EKF yaw 폭주 (96°→-155°) + planner off-costmap 실패
+    # 전략: RF2O 공분산을 0.1→0.5 m²로 증가하여 EKF 영향력 축소
+    #       → 전진 중 좌편향 감소 + 회전 중 위치 보정 유지
+    odom2_config: [true,  true,  false,    # x, y, z ← 재활성화 (공분산 증가로 영향력 축소)
+                   false, false, false,    # roll, pitch, yaw ← 제거 유지
+                   false, false, false,    # vx, vy, vz
                    false, false, false,    # vroll, vpitch, vyaw
                    false, false, false]    # ax, ay, az
 
@@ -162,10 +167,11 @@ ekf_filter_node:
     odom2_queue_size: 10
     
     # RF2O 공분산:
-    #   rf2o_covariance_adapter가 최소 공분산을 부여함
+    #   rf2o_covariance_adapter가 회전 상태에 따라 동적 공분산 적용 (2026-03-16)
+    #   - 직진 시: position_cov = 0.5 m² (기본값)
+    #   - 회전 시: position_cov = 0.5 × 20 = 10.0 m² (RF2O 영향력 대폭 감소)
+    #   - 이유: 제자리 회전 시 RF2O 스캔매칭이 부정확 → noisy x,y가 EKF 오염
     #   (robot_localization ROS2 Humble은 odomN_pose_covariance 파라미터 미지원)
-    #   - min_position_cov: 0.1 m²
-    #   - min_orientation_cov: 0.05 rad² (yaw 제거로 현재 미사용)
     
     odom2_pose_rejection_threshold: 5.0    # LiDAR odom 아웃라이어 거부
 

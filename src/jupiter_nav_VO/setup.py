@@ -26,6 +26,7 @@ setup(
         'console_scripts': [
             'odom_covariance_adapter = jupiter_nav_VO.odom_covariance_adapter:main',
             'vslam_covariance_adapter = jupiter_nav_VO.vslam_covariance_adapter:main',
+            'rf2o_covariance_adapter = jupiter_nav_VO.rf2o_covariance_adapter:main',
             'goal_pose_restamper = jupiter_nav_VO.goal_pose_restamper:main',
             #odom_covariance_adapter: 사용자가 터미널에 입력할 커맨드(명령어) 이름입니다.
             # jupiter_nav_VO.odom_covariance_adapter: 실행될 파이썬 모듈(파일) 경로입니다.

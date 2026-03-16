@@ -233,6 +233,16 @@ class JupiterDriver(Node):
             # Scale down to match commanded rad/s to actual rad/s
             angular_corrected = angular * self.ANGULAR_SCALE_FACTOR
             
+            # [2026-03-16 방안B] MCU 데드존 우회: 최소 회전 속도 보장
+            # MCU Motor_Ignore_Dead_Zone에서 작은 PID 출력이 0 또는 역방향으로 매핑됨
+            # 이로 인해 순수 회전 시 모터가 데드존에 빠져 움직이지 못하는 문제 발생
+            # ※ 방안A(펌웨어 Motor_Ignore_Dead_Zone 비례매핑) 적용 후 아래 블록 제거할 것
+            # ── 방안B 시작 ──
+            MIN_ANGULAR_DEADZONE = 0.15  # rad/s (scaled) — MCU 데드존 탈출 최소값
+            if abs(angular_corrected) > 0.01 and abs(angular_corrected) < MIN_ANGULAR_DEADZONE:
+                angular_corrected = MIN_ANGULAR_DEADZONE if angular_corrected > 0 else -MIN_ANGULAR_DEADZONE
+            # ── 방안B 끝 ──
+            
             # Apply minimal deadband to reduce command jitter and motor noise
             # Small values near zero often result from Nav2 controller noise
             if abs(vx) < 0.001:
