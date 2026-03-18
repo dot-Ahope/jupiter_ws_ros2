@@ -178,8 +178,71 @@ class JupiterDriver(Node):
         except Exception as e:
             self.get_logger().error(f"Failed to set initial PID parameters: {str(e)}")
         
+        # [2026-03-17 방안B-2] Anti-hunting angular velocity filter state
+        # MCU 데드존(0/72/144) + PID 적분 윈드업으로 인한
+        # 헌팅→오버슈트→발산 방지용 상태 변수
+        # ※ 방안A(펌웨어) 적용 후 아래 초기화 및 _anti_hunting_filter() 삭제할 것
+        self._ah_last_angular = 0.0
+        self._ah_last_time = time.time()
+        self._ah_reversal_count = 0
+        self._ah_last_reversal_time = 0.0
+        self._ah_brake_until = 0.0  # 제동 해제 시점
+        
         self.get_logger().info('Jupiter Driver Node has been initialized')
         
+    def _anti_hunting_filter(self, angular_corrected):
+        """[방안B-2] MCU 데드존으로 인한 헌팅→윈드업→오버슈트 방지 필터.
+        
+        MCU Motor_Ignore_Dead_Zone이 PID 출력을 0/72/144로 양자화하여
+        비례 제어가 불가능. 이로 인해:
+        1) 작은 PID 출력(<72)이 72(후진)으로 매핑 → 반대 방향 이동
+        2) 에러 누적 → PID 적분 윈드업
+        3) PID 출력이 144 초과 → 갑자기 풀스피드 → 오버슈트
+        4) Nav2가 방향 전환 → 같은 사이클 반복 → 발산
+        
+        대책: 방향 전환(sign flip) 감지 시 짧은 제동(zero) 삽입으로
+        MCU PID 적분을 리셋시키고, angular rate limiting으로 급변 방지.
+        ※ 방안A(펌웨어) 적용 후 이 메서드 전체 삭제할 것.
+        """
+        now = time.time()
+        dt = max(now - self._ah_last_time, 0.001)
+        self._ah_last_time = now
+        
+        # 제동 구간 중이면 zero 출력 (MCU Differential_Ctrl이 Motion_Stop 호출)
+        if now < self._ah_brake_until:
+            self._ah_last_angular = 0.0
+            return 0.0
+        
+        # 방향 전환 감지 (angular sign flip)
+        if (angular_corrected * self._ah_last_angular < -0.001 and
+                abs(self._ah_last_angular) > 0.03):
+            self._ah_reversal_count += 1
+            self._ah_last_reversal_time = now
+        else:
+            # 1초 이상 전환 없으면 카운터 감소
+            if now - self._ah_last_reversal_time > 1.0:
+                self._ah_reversal_count = max(0, self._ah_reversal_count - 1)
+        
+        # 연속 방향 전환 감지 (0.8초 내 2회 이상) → 헌팅 상태
+        # 제동 삽입: MCU에 (0,0,0) 전송 → Differential_Ctrl → Motion_Stop → PID 리셋
+        if (self._ah_reversal_count >= 2 and
+                now - self._ah_last_reversal_time < 0.8):
+            self._ah_brake_until = now + 0.15  # 150ms 제동
+            self._ah_reversal_count = 0
+            self._ah_last_angular = 0.0
+            return 0.0
+        
+        # Angular rate limiting: 급격한 각속도 변화 방지
+        # MCU PID가 새 목표에 적응할 시간 확보
+        MAX_ANG_RATE = 2.0  # rad/s² (scaled 후 기준)
+        max_change = MAX_ANG_RATE * dt
+        diff = angular_corrected - self._ah_last_angular
+        if abs(diff) > max_change:
+            angular_corrected = self._ah_last_angular + math.copysign(max_change, diff)
+        
+        self._ah_last_angular = angular_corrected
+        return angular_corrected
+    
     def parameter_callback(self, params):
         """Handle parameter updates"""
         for param in params:
@@ -238,10 +301,14 @@ class JupiterDriver(Node):
             # 이로 인해 순수 회전 시 모터가 데드존에 빠져 움직이지 못하는 문제 발생
             # ※ 방안A(펌웨어 Motor_Ignore_Dead_Zone 비례매핑) 적용 후 아래 블록 제거할 것
             # ── 방안B 시작 ──
-            MIN_ANGULAR_DEADZONE = 0.15  # rad/s (scaled) — MCU 데드존 탈출 최소값
-            if abs(angular_corrected) > 0.01 and abs(angular_corrected) < MIN_ANGULAR_DEADZONE:
-                angular_corrected = MIN_ANGULAR_DEADZONE if angular_corrected > 0 else -MIN_ANGULAR_DEADZONE
-            # ── 방안B 끝 ──
+            # MIN_ANGULAR_DEADZONE = 0.25  # rad/s (scaled) — MCU 데드존 탈출 최소값 (0.15→0.25 강화)
+            # if abs(angular_corrected) > 0.01 and abs(angular_corrected) < MIN_ANGULAR_DEADZONE:
+            #     angular_corrected = MIN_ANGULAR_DEADZONE if angular_corrected > 0 else -MIN_ANGULAR_DEADZONE
+            # # ── 방안B 끝 ──
+            
+            # # [2026-03-17 방안B-2] Anti-hunting filter: 방향전환 감쇠 + rate limiting
+            # # ※ 방안A(펌웨어) 적용 후 아래 1줄 삭제할 것
+            # angular_corrected = self._anti_hunting_filter(angular_corrected)
             
             # Apply minimal deadband to reduce command jitter and motor noise
             # Small values near zero often result from Nav2 controller noise

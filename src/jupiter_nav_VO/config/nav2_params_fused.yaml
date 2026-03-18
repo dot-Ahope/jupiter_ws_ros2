@@ -121,16 +121,16 @@ controller_server:
       min_vel_y: 0.0
       max_vel_x: 0.35              # 보수적 선속도 (실내 안전)
       max_vel_y: 0.0               # 차동구동 — Y 속도 없음
-      max_vel_theta: 1.0           # 각속도 최대값
+      max_vel_theta: 0.7           # ⭐ 1.0→0.7: 데드존 오버슈트 방지 — 최대 회전속도 제한 [2026-03-17]
       min_speed_xy: 0.0
       max_speed_xy: 0.35
       min_speed_theta: 0.30        # ⭐ 0.15→0.30 (모터 데드존 확실히 초과 — 정지 회전 시 최소 보장)
       acc_lim_x: 0.5
       acc_lim_y: 0.0
-      acc_lim_theta: 0.8
+      acc_lim_theta: 0.5           # ⭐ 0.8→0.5: 각가속도 제한 강화 — MCU PID 적응 시간 확보 [2026-03-17]
       decel_lim_x: -0.5
       decel_lim_y: 0.0
-      decel_lim_theta: -0.8
+      decel_lim_theta: -0.5        # ⭐ -0.8→-0.5: 각감속도 제한 강화 [2026-03-17]
       vx_samples: 20
       vy_samples: 1                # 차동구동이므로 Y 샘플 최소화
       vtheta_samples: 20
@@ -153,10 +153,10 @@ controller_server:
       RotateToGoal.scale: 32.0
       RotateToGoal.slowing_factor: 2.0   # min_speed_theta=0.30이 바닥, slowing으로 떨어져도 0.30 보장
       RotateToGoal.lookahead_time: -1.0
-      Twirling.scale: 5.0                # 경로 추종 중 불필요한 스핀 방지
+      Twirling.scale: 15.0               # ⭐ 5.0→15.0: 데드존 오버슈트 스핀 강력 억제 [2026-03-17]
       Oscillation.oscillation_reset_dist: 0.15
       Oscillation.oscillation_reset_angle: 0.30
-      Oscillation.scale: 1.0
+      Oscillation.scale: 5.0              # ⭐ 1.0→5.0: 좌우 진동(헌팅) 탐지 시 강한 페널티 [2026-03-17]
 
 # ==============================================================
 # Planner Server (NavFn Global Planner)
