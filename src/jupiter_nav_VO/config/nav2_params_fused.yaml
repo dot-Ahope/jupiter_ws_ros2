@@ -96,7 +96,7 @@ controller_server:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
       xy_goal_tolerance: 0.20          # ⭐ 0.15→0.20 (DWB xy_tol=0.25 보다 좁아야 함, 여유 확보)
-      yaw_goal_tolerance: 0.50          # ⭐ 0.35→0.50 (~29°, 최종 회전 요구 완화 → ABORTED 방지)
+      yaw_goal_tolerance: 0.10          # ⭐ 0.25→0.10 (~5.7°): foxglove 10° 부족 해소 [2026-03-19]
 
     # ==============================================================
     # RotationShimController → DWB 래핑
@@ -109,8 +109,8 @@ controller_server:
     FollowPath:
       plugin: "nav2_rotation_shim_controller::RotationShimController"
       primary_controller: "dwb_core::DWBLocalPlanner"
-      angular_dist_threshold: 0.785      # 45° — 경로 방향과 헤딩 차이가 이 이상이면 제자리 회전
-      forward_sampling_distance: 0.5     # 경로 앞쪽 0.5m 지점으로 방향 계산
+      angular_dist_threshold: 0.35        # ⭐ 45°→20°: RotationShim이 160° 회전 담당, DWB는 20°만 보정 [2026-03-19]
+      forward_sampling_distance: 0.3     # ⭐ 0.5→0.3: 짧은 경로(0.5m 복귀)에서 RotationShim 활성화 보장 [2026-03-18]
       rotate_to_heading_angular_vel: 0.8 # ⭐ 정지 회전 고정 속도 — 0.5에서 실패(5차 테스트: 실제 0.05~0.18만 달성). 0.8로 상향
       max_angular_accel: 5.0             # ⭐ 1.6→5.0: 가속 리미터=actual_vel+accel*dt, 1.6일 때 actual 0.3이면 cmd 0.46 한계→0.8 미도달. 5.0이면 actual 0.3→cmd 0.8 즉시 도달
       simulate_ahead_time: 1.0           # 충돌 검사 시뮬레이션 시간
@@ -121,16 +121,16 @@ controller_server:
       min_vel_y: 0.0
       max_vel_x: 0.35              # 보수적 선속도 (실내 안전)
       max_vel_y: 0.0               # 차동구동 — Y 속도 없음
-      max_vel_theta: 0.7           # ⭐ 1.0→0.7: 데드존 오버슈트 방지 — 최대 회전속도 제한 [2026-03-17]
+      max_vel_theta: 1.0           # 각속도 최대값 (방안A 펌웨어 적용으로 1.0 복원)
       min_speed_xy: 0.0
       max_speed_xy: 0.35
       min_speed_theta: 0.30        # ⭐ 0.15→0.30 (모터 데드존 확실히 초과 — 정지 회전 시 최소 보장)
       acc_lim_x: 0.5
       acc_lim_y: 0.0
-      acc_lim_theta: 0.5           # ⭐ 0.8→0.5: 각가속도 제한 강화 — MCU PID 적응 시간 확보 [2026-03-17]
+      acc_lim_theta: 0.8           # 각가속도 (방안A 펌웨어 적용으로 0.8 복원)
       decel_lim_x: -0.5
       decel_lim_y: 0.0
-      decel_lim_theta: -0.5        # ⭐ -0.8→-0.5: 각감속도 제한 강화 [2026-03-17]
+      decel_lim_theta: -0.8        # 각감속도 (방안A 펌웨어 적용으로 -0.8 복원)
       vx_samples: 20
       vy_samples: 1                # 차동구동이므로 Y 샘플 최소화
       vtheta_samples: 20
@@ -151,12 +151,12 @@ controller_server:
       PathDist.scale: 32.0
       GoalDist.scale: 24.0
       RotateToGoal.scale: 32.0
-      RotateToGoal.slowing_factor: 2.0   # min_speed_theta=0.30이 바닥, slowing으로 떨어져도 0.30 보장
+      RotateToGoal.slowing_factor: 5.0   # ⭐ 2.0→5.0: 오버슈트 억제 — 목표 헤딩 근접 시 빠른 감속 [2026-03-19]
       RotateToGoal.lookahead_time: -1.0
-      Twirling.scale: 15.0               # ⭐ 5.0→15.0: 데드존 오버슈트 스핀 강력 억제 [2026-03-17]
+      Twirling.scale: 5.0                # 경로 추종 중 불필요한 스핀 방지 (방안A 적용으로 5.0 복원)
       Oscillation.oscillation_reset_dist: 0.15
       Oscillation.oscillation_reset_angle: 0.30
-      Oscillation.scale: 5.0              # ⭐ 1.0→5.0: 좌우 진동(헌팅) 탐지 시 강한 페널티 [2026-03-17]
+      Oscillation.scale: 1.0              # 진동 페널티 (방안A 적용으로 1.0 복원)
 
 # ==============================================================
 # Planner Server (NavFn Global Planner)
@@ -284,6 +284,27 @@ global_costmap:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 5.0        # ⭐ 3.0→5.0 (local과 동일 — inflation decay 가속)
         inflation_radius: 0.30          # ⭐ 0.35→0.30 (local과 동일)
+
+# ==============================================================
+# Velocity Smoother
+# ==============================================================
+# navigation_launch.py가 기본 생성하는 velocity_smoother 노드의 파라미터
+# controller_server → /cmd_vel_nav → velocity_smoother → /cmd_vel → driver
+# 이 설정 없으면 기본값(max_accel:[2.5,0,3.2]) 사용 — 로봇 특성과 불일치 [2026-03-18]
+velocity_smoother:
+  ros__parameters:
+    use_sim_time: False
+    smoothing_frequency: 20.0
+    scale_velocities: false
+    feedback: "OPEN_LOOP"
+    max_velocity: [0.35, 0.0, 1.0]       # 로봇 최대 속도 (max_vel_x, 0, max_vel_theta)
+    min_velocity: [-0.35, 0.0, -1.0]
+    max_accel: [0.5, 0.0, 2.5]           # ⭐ angular 0.8→2.5: ESC 데드존 구간 빠르게 통과 [2026-03-19]
+    max_decel: [-0.5, 0.0, -2.5]         # ⭐ angular -0.8→-2.5: 회전 정지 시 데드존 통과 최소화 [2026-03-19]
+    odom_topic: "odom"
+    odom_duration: 0.1
+    deadband_velocity: [0.0, 0.0, 0.05]  # ⭐ 0.20→0.05: 0.20은 DWB 헤딩보정(0.05~0.15) 차단→Goal1 TIMEOUT. 노이즈만 필터링 [2026-03-19]
+    velocity_timeout: 1.0
 
 # ==============================================================
 # Waypoint Follower

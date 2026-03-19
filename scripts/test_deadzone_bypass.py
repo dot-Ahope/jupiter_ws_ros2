@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""방안B 데드존 우회 검증 + Nav2 Goal 테스트"""
+"""방안A-4 ESC 데드존 스킵 검증 + Nav2 Goal 테스트
+
+토픽 구조:
+  Part 1,2: /cmd_vel_nav → velocity_smoother → /cmd_vel → driver (Nav2 경로 사용)
+  Part 3:   Nav2 action → controller_server → /cmd_vel_nav → smoother → driver
+"""
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist, PoseStamped
@@ -12,7 +17,9 @@ import math, time, threading, sys
 class DeadzoneAndGoalTest(Node):
     def __init__(self):
         super().__init__('deadzone_goal_test')
-        self.pub = self.create_publisher(Twist, '/cmd_vel', 10)
+        # velocity_smoother 입력 토픽으로 publish → smoother → /cmd_vel → driver
+        # /cmd_vel 직접 publish하면 smoother(20Hz)와 경합하여 명령 50%+ 손실
+        self.pub = self.create_publisher(Twist, '/cmd_vel_nav', 10)
         self.yaw_vals = []
         self.odom_msgs = []
         self.vslam_count = 0
@@ -35,19 +42,24 @@ class DeadzoneAndGoalTest(Node):
         self.vslam_count += 1
 
     def test_deadzone(self):
-        """Part 1: 작은 회전 명령으로 데드존 우회 확인"""
+        """Part 1: 작은 회전 명령 → velocity_smoother deadband 확인
+        
+        deadband_velocity[2] = 0.05이므로 0.1 rad/s는 smoother 통과.
+        MCU 방안A-4 ESC 데드존 스킵이 작동하면 로봇이 회전해야 함.
+        """
         print("\n" + "="*60)
-        print("Part 1: 데드존 우회 테스트 (angular.z = 0.1 rad/s, 3초)")
+        print("Part 1: ESC 데드존 스킵 테스트 (angular.z = 0.1 rad/s, 3초)")
         print("="*60)
         
         time.sleep(1.0)
         yaw_start = self.yaw_vals[-1][1] if self.yaw_vals else 0.0
         
         twist = Twist()
-        twist.angular.z = 0.1  # 방안B 없으면 데드존에 갇힘
+        twist.angular.z = 0.1  # > deadband(0.05) → smoother 통과 → driver → MCU
         
         print(f"Initial yaw: {yaw_start:.2f} deg")
-        print(f"Sending angular.z = 0.1 rad/s ...")
+        print(f"Sending angular.z = 0.1 rad/s (> deadband 0.05) ...")
+        expected_deg = math.degrees(0.1 * 3.0)  # 17.2°
         
         t0 = time.time()
         while time.time() - t0 < 3.0:
@@ -67,17 +79,21 @@ class DeadzoneAndGoalTest(Node):
         if yaw_delta < -180: yaw_delta += 360
         
         print(f"Final yaw: {yaw_end:.2f} deg")
-        print(f"Yaw change: {yaw_delta:.2f} deg")
+        print(f"Yaw change: {yaw_delta:.2f} deg (expected: {expected_deg:.1f}°)")
         
-        if abs(yaw_delta) > 3.0:
-            print(">>> PASS: 로봇 회전됨 — 방안B 데드존 우회 작동")
+        if abs(yaw_delta) > 5.0:
+            print(">>> PASS: 방안A-4 ESC 데드존 스킵 작동 — 로봇 회전됨")
             return True
         else:
-            print(">>> FAIL: 로봇 미움직임 — 데드존 문제 지속")
+            print(">>> FAIL: 로봇 미움직임 — ESC 데드존 문제 지속")
             return False
 
     def test_medium_rotation(self):
-        """Part 2: 중간 회전 명령 (angular.z = 0.5 rad/s, 이전에 못 움직이던 값)"""
+        """Part 2: 중간 회전 명령 — ESC 데드존 스킵 + ANGULAR_SCALE_FACTOR 검증
+        
+        /cmd_vel_nav로 publish → velocity_smoother → /cmd_vel → driver
+        expected: 0.5 rad/s × 3s = 85.9°
+        """
         print("\n" + "="*60)
         print("Part 2: 중간 회전 테스트 (angular.z = 0.5 rad/s, 3초)")
         print("="*60)
@@ -87,9 +103,10 @@ class DeadzoneAndGoalTest(Node):
         
         twist = Twist()
         twist.angular.z = 0.5
+        expected_deg = math.degrees(0.5 * 3.0)  # 85.9°
         
         print(f"Initial yaw: {yaw_start:.2f} deg")
-        print(f"Sending angular.z = 0.5 rad/s ...")
+        print(f"Sending angular.z = 0.5 rad/s ... (expected: {expected_deg:.1f}°)")
         
         t0 = time.time()
         while time.time() - t0 < 3.0:
@@ -107,13 +124,19 @@ class DeadzoneAndGoalTest(Node):
         if yaw_delta > 180: yaw_delta -= 360
         if yaw_delta < -180: yaw_delta += 360
         
-        print(f"Final yaw: {yaw_end:.2f} deg")
-        print(f"Yaw change: {yaw_delta:.2f} deg")
+        accuracy = abs(yaw_delta) / expected_deg * 100 if expected_deg > 0 else 0
         
-        if abs(yaw_delta) > 5.0:
-            print(">>> PASS: 로봇 회전됨")
-        else:
+        print(f"Final yaw: {yaw_end:.2f} deg")
+        print(f"Yaw change: {yaw_delta:.2f} deg (accuracy: {accuracy:.0f}%)")
+        
+        if abs(yaw_delta) < 5.0:
             print(">>> FAIL: 로봇 미움직임")
+        elif accuracy > 85:
+            print(f">>> PASS: 회전 정확도 {accuracy:.0f}% — ANGULAR_SCALE_FACTOR 적합")
+        else:
+            suggested = 0.401 * (expected_deg / abs(yaw_delta)) if abs(yaw_delta) > 1 else 0.401
+            print(f">>> WARN: 회전 정확도 {accuracy:.0f}% — ANGULAR_SCALE_FACTOR 조정 필요")
+            print(f"   현재: 0.401, 제안: {suggested:.3f}")
         return yaw_delta
 
     def send_nav_goal(self, x, y, yaw_deg, timeout=60.0):
