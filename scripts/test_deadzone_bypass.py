@@ -27,6 +27,10 @@ class DeadzoneAndGoalTest(Node):
         self.create_subscription(Odometry, '/odom', self.odom_cb, 10)
         self.create_subscription(Odometry, '/visual_slam/tracking/odometry_adapted',
                                  self.vslam_cb, 10)
+        # Goal2 진단: /cmd_vel_nav (controller→smoother) 모니터링
+        self.cmd_vel_nav_log = []  # (time, linear.x, angular.z)
+        self.cmd_vel_nav_logging = False
+        self.create_subscription(Twist, '/cmd_vel_nav', self.cmd_vel_nav_cb, 10)
         
         self.nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
         
@@ -41,14 +45,19 @@ class DeadzoneAndGoalTest(Node):
     def vslam_cb(self, msg):
         self.vslam_count += 1
 
+    def cmd_vel_nav_cb(self, msg):
+        if self.cmd_vel_nav_logging:
+            self.cmd_vel_nav_log.append((
+                time.time(), msg.linear.x, msg.angular.z))
+
     def test_deadzone(self):
-        """Part 1: 작은 회전 명령 → velocity_smoother deadband 확인
+        """Part 1: MCU 엔코더 분해능 + 방안C(MCU_MIN_ANGULAR) 테스트
         
-        deadband_velocity[2] = 0.05이므로 0.1 rad/s는 smoother 통과.
-        MCU 방안A-4 ESC 데드존 스킵이 작동하면 로봇이 회전해야 함.
+        0.1 rad/s → driver ×0.401 = 0.04 at MCU → 엔코더 0.40 ticks
+        방안C: 0.04 < MCU_MIN_ANGULAR(0.15) → 0.15로 클램프 → 1.5 ticks → PID 안정
         """
         print("\n" + "="*60)
-        print("Part 1: ESC 데드존 스킵 테스트 (angular.z = 0.1 rad/s, 3초)")
+        print("Part 1: 방안C 엔코더 분해능 보정 테스트 (angular.z = 0.1 rad/s, 3초)")
         print("="*60)
         
         time.sleep(1.0)
@@ -58,7 +67,7 @@ class DeadzoneAndGoalTest(Node):
         twist.angular.z = 0.1  # > deadband(0.05) → smoother 통과 → driver → MCU
         
         print(f"Initial yaw: {yaw_start:.2f} deg")
-        print(f"Sending angular.z = 0.1 rad/s (> deadband 0.05) ...")
+        print(f"Sending angular.z = 0.1 → smoother → driver 방안C 클램프 0.15 ...")
         expected_deg = math.degrees(0.1 * 3.0)  # 17.2°
         
         t0 = time.time()
@@ -82,10 +91,10 @@ class DeadzoneAndGoalTest(Node):
         print(f"Yaw change: {yaw_delta:.2f} deg (expected: {expected_deg:.1f}°)")
         
         if abs(yaw_delta) > 5.0:
-            print(">>> PASS: 방안A-4 ESC 데드존 스킵 작동 — 로봇 회전됨")
+            print(">>> PASS: 방안C MCU_MIN_ANGULAR 작동 — 로봇 회전됨")
             return True
         else:
-            print(">>> FAIL: 로봇 미움직임 — ESC 데드존 문제 지속")
+            print(">>> FAIL: 로봇 미움직임 — 방안C 미작동 또는 ESC 데드존 지속")
             return False
 
     def test_medium_rotation(self):
@@ -230,14 +239,17 @@ class DeadzoneAndGoalTest(Node):
         
         time.sleep(2.0)
         
-        # Goal2: 원래 위치 복귀
+        # Goal2: 원래 위치 복귀 (cmd_vel_nav 로깅 활성화)
         print(f"\n--- Goal2: Return to ({cur_x:.3f}, {cur_y:.3f}, {cur_yaw:.1f}) ---")
         
         vslam_before = self.vslam_count
         yaw_vals_g2_start = len(self.yaw_vals)
+        self.cmd_vel_nav_log.clear()
+        self.cmd_vel_nav_logging = True
         
         status2, time2 = self.send_nav_goal(cur_x, cur_y, cur_yaw, timeout=60.0)
         
+        self.cmd_vel_nav_logging = False
         vslam_g2 = self.vslam_count - vslam_before
         
         # Goal2 중 yaw 분석
@@ -259,6 +271,27 @@ class DeadzoneAndGoalTest(Node):
         print(f"Goal2: {status2} in {time2:.1f}s (VSLAM adapted: {vslam_g2})")
         print(f"  Yaw span during Goal2: {yaw_span:.1f} deg")
         print(f"  Final distance to start: {dist:.3f}m")
+        
+        # cmd_vel_nav 진단 출력 (Goal2 중 controller가 보낸 명령 분석)
+        if self.cmd_vel_nav_log:
+            az_vals = [abs(e[2]) for e in self.cmd_vel_nav_log]
+            az_nonzero = [v for v in az_vals if v > 0.01]
+            lx_vals = [abs(e[1]) for e in self.cmd_vel_nav_log]
+            lx_nonzero = [v for v in lx_vals if v > 0.01]
+            print(f"  cmd_vel_nav 통계 ({len(self.cmd_vel_nav_log)} msgs):")
+            print(f"    angular: {len(az_nonzero)} non-zero, "
+                  f"max={max(az_vals):.3f}, "
+                  f"avg_nz={sum(az_nonzero)/len(az_nonzero):.3f}" if az_nonzero else 
+                  f"    angular: 0 non-zero — Nav2가 회전 명령을 보내지 않음!")
+            print(f"    linear:  {len(lx_nonzero)} non-zero, "
+                  f"max={max(lx_vals):.3f}" if lx_nonzero else 
+                  f"    linear:  0 non-zero")
+            # 첫 3초 샘플 출력
+            t0_log = self.cmd_vel_nav_log[0][0]
+            early = [(t-t0_log, lx, az) for t, lx, az in self.cmd_vel_nav_log if t-t0_log < 3.0]
+            print(f"    첫 3초 샘플 ({len(early)} msgs):")
+            for t, lx, az in early[:15]:
+                print(f"      t={t:.2f}s lx={lx:.3f} az={az:.3f}")
         
         # 결과 요약
         print("\n" + "="*60)

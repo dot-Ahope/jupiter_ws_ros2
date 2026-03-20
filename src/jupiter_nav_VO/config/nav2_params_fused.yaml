@@ -96,7 +96,7 @@ controller_server:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
       xy_goal_tolerance: 0.20          # ⭐ 0.15→0.20 (DWB xy_tol=0.25 보다 좁아야 함, 여유 확보)
-      yaw_goal_tolerance: 0.10          # ⭐ 0.25→0.10 (~5.7°): foxglove 10° 부족 해소 [2026-03-19]
+      yaw_goal_tolerance: 0.15          # ⭐ 0.10→0.15 (~8.6°): RotateToGoal min_speed_theta=0.30 + MCU PID 오버슈트(~5°) > 5.7° → 수렴불가. 8.6°로 확대 [2026-03-20]
 
     # ==============================================================
     # RotationShimController → DWB 래핑
@@ -111,8 +111,8 @@ controller_server:
       primary_controller: "dwb_core::DWBLocalPlanner"
       angular_dist_threshold: 0.35        # ⭐ 45°→20°: RotationShim이 160° 회전 담당, DWB는 20°만 보정 [2026-03-19]
       forward_sampling_distance: 0.3     # ⭐ 0.5→0.3: 짧은 경로(0.5m 복귀)에서 RotationShim 활성화 보장 [2026-03-18]
-      rotate_to_heading_angular_vel: 0.8 # ⭐ 정지 회전 고정 속도 — 0.5에서 실패(5차 테스트: 실제 0.05~0.18만 달성). 0.8로 상향
-      max_angular_accel: 5.0             # ⭐ 1.6→5.0: 가속 리미터=actual_vel+accel*dt, 1.6일 때 actual 0.3이면 cmd 0.46 한계→0.8 미도달. 5.0이면 actual 0.3→cmd 0.8 즉시 도달
+      rotate_to_heading_angular_vel: 0.5 # ⭐ 0.8→0.5 [2026-03-20] 방안A-4 ESC deadzone skip 후 0.5도 즉시 토크 발생. 0.8은 PID 적분 모멘텀 과다→핸드오프 오버슈트
+      max_angular_accel: 3.0             # ⭐ 5.0→3.0 [2026-03-20] 0.5 목표 시 5.0 불필요. 3.0이면 0→0.5 도달 0.17s. RotateToGoal 급가속 억제
       simulate_ahead_time: 1.0           # 충돌 검사 시뮬레이션 시간
 
       # DWB 파라미터 (primary_controller)
@@ -124,7 +124,7 @@ controller_server:
       max_vel_theta: 1.0           # 각속도 최대값 (방안A 펌웨어 적용으로 1.0 복원)
       min_speed_xy: 0.0
       max_speed_xy: 0.35
-      min_speed_theta: 0.30        # ⭐ 0.15→0.30 (모터 데드존 확실히 초과 — 정지 회전 시 최소 보장)
+      min_speed_theta: 0.15        # ⭐ 0.30→0.15 [2026-03-20] 방안A-4 ESC 스킵 후 0.15도 토크 발생. 0.30은 DWB 데드존(8.6°~14.3°) 생성→헌팅 원인
       acc_lim_x: 0.5
       acc_lim_y: 0.0
       acc_lim_theta: 0.8           # 각가속도 (방안A 펌웨어 적용으로 0.8 복원)

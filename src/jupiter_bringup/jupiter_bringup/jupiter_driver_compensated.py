@@ -26,6 +26,14 @@ class JupiterDriver(Node):
     # 방안A-4 후 ESC 매핑 변경 → MCU 게인 2.83→2.49 (Part2: 0.5rad/s×3s=85.9° 예상, 75.59° 실측)
     # 보정: 0.353 × (85.9/75.59) = 0.401
     ANGULAR_SCALE_FACTOR = 0.401  # 방안A-4 기준 재캘리브레이션
+
+    # 방안C: MCU 엔코더 분해능 한계 보정 (정지 회전 시 최소 각속도)
+    # 엔코더: 1320 pulse/rev, 10ms 측정주기 → 1 tick = 16.3 mm/s
+    # PID target < 16.3 mm/s → 0 tick과 1 tick 사이 진동 → 전진↔후진 반복 → 순회전 0
+    # MCU_MIN_ANGULAR = 0.12 → 19.7 mm/s → 1.21 ticks/period
+    # 주의: min_speed_theta(0.30) × SCALE(0.401) = 0.120 ≥ 0.12 → DWB 명령에 클램프 미적용
+    # (0.15일 때 0.120 < 0.15 → 클램프 0.15 → 실효 0.374 = 24% 증폭 → 오버슈트→헌팅)
+    MCU_MIN_ANGULAR = 0.12
     
     def __init__(self):
         super().__init__('jupiter_driver_compensated')
@@ -75,7 +83,10 @@ class JupiterDriver(Node):
                 description='Proportional gain'
             ))
             
-        self.declare_parameter('Ki', 0.06,
+        # Ki: 0.06→0.02 [2026-03-19] 방안A-4 ESC 스킵 후 적분 불필요하게 큼
+        # 높은 Ki → incremental PID 누적 출력 과다 → 방향전환 시 ~2초 지연 → 오버슈트→헌팅
+        # 0.02: 적분 누적 3x 감소 → 방향전환 ~0.7초
+        self.declare_parameter('Ki', 0.02,
             ParameterDescriptor(
                 type=ParameterType.PARAMETER_DOUBLE,
                 floating_point_range=[FloatingPointRange(
@@ -85,8 +96,11 @@ class JupiterDriver(Node):
                 )],
                 description='Integral gain'
             ))
-            
-        self.declare_parameter('Kd', 0.5,
+        
+        # Kd: 0.5→0.3 [2026-03-19] incremental PID에서 Kd는 출력 변화에 저항
+        # 높은 Kd → 방향전환 시 pwm 감소를 억제 → 감속 지연
+        # 0.3: 출력 변경 저항 감소 → 빠른 감속. 약간의 진동은 Nav2가 10Hz 보정으로 흡수
+        self.declare_parameter('Kd', 0.3,
             ParameterDescriptor(
                 type=ParameterType.PARAMETER_DOUBLE,
                 floating_point_range=[FloatingPointRange(
@@ -237,6 +251,14 @@ class JupiterDriver(Node):
             
             # ESC 데드존은 펌웨어 방안A-4 (ESC deadzone skip)가 처리
             # PID 출력≠0이면 즉시 ESC 111/105로 점프 → 적분 지연 없음
+            
+            # 방안C: MCU 엔코더 분해능 한계 보정 (정지 회전 전용)
+            # 정지(vx≈0): 양 바퀴 0 ticks → 작은 angular는 0↔1 tick 진동 → 순회전 0
+            # 전진(vx>0): 양 바퀴 이미 다수 ticks → 작은 차이도 PID 추적 가능 → 클램프 불필요
+            # 전진 중 클램프하면 DWB 헤딩보정이 2~3배 증폭되어 오버슈트→헌팅 발생!
+            if abs(vx) < 0.02:  # 정지 상태에서만 클램프
+                if abs(angular_corrected) > 0.001 and abs(angular_corrected) < self.MCU_MIN_ANGULAR:
+                    angular_corrected = math.copysign(self.MCU_MIN_ANGULAR, angular_corrected)
             
             # Apply minimal deadband to reduce command jitter and motor noise
             # Small values near zero often result from Nav2 controller noise
