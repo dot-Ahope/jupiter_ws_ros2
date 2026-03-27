@@ -16,7 +16,6 @@ def generate_launch_description():
         parameters=[{
             'imu': '/jupiter/imu',
             'vel': '/jupiter/get_vel',
-            'CameraDevice': 'astra'
         }]
     )
     

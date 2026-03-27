@@ -218,7 +218,7 @@ local_costmap:
       transform_tolerance: 0.5          # stamp=Time(0,0) + NTP chrony 적용 후 축소 (3.0→0.5)
       # Jupiter footprint (360mm × 245mm)
       footprint: "[ [0.18, 0.1225], [0.18, -0.1225], [-0.18, -0.1225], [-0.18, 0.1225] ]"
-      plugins: ["obstacle_layer", "inflation_layer"]
+      plugins: ["obstacle_layer", "nvblox_layer", "inflation_layer"]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
@@ -235,6 +235,16 @@ local_costmap:
           obstacle_max_range: 5.0     # 장애물 감지 최대 범위
           obstacle_min_range: 0.1
           inf_is_valid: False
+      # nvblox 3D → 2D ESDF costmap layer (Docker nvblox_node에서 발행)
+      # nvblox_node 미실행 시 토픽 미수신 → 영향 없음 (graceful degradation)
+      nvblox_layer:
+        plugin: "nvblox::nav2::NvbloxCostmapLayer"
+        enabled: True
+        nav2_costmap_global_frame: "odom"   # local_costmap global_frame과 일치
+        nvblox_map_slice_topic: "/nvblox_node/static_map_slice"
+        convert_to_binary_costmap: True     # NVIDIA 권장: inflation은 별도 layer 사용
+        max_obstacle_distance: 1.0
+        inflation_distance: 0.5
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 5.0        # ⭐ 3.0→5.0 (inflation decay 가속 → 유효 inflation 폭 축소)
@@ -259,7 +269,7 @@ global_costmap:
       resolution: 0.05
       track_unknown_space: true
       # SLAM Toolbox의 맵을 사용 — static_layer가 /map 토픽을 구독
-      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      plugins: ["static_layer", "obstacle_layer", "nvblox_layer", "inflation_layer"]
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: True
@@ -280,6 +290,15 @@ global_costmap:
           obstacle_max_range: 5.0
           obstacle_min_range: 0.1
           inf_is_valid: False
+      # nvblox 3D → 2D ESDF costmap layer (Docker nvblox_node에서 발행)
+      nvblox_layer:
+        plugin: "nvblox::nav2::NvbloxCostmapLayer"
+        enabled: True
+        nav2_costmap_global_frame: "map"    # global_costmap global_frame과 일치
+        nvblox_map_slice_topic: "/nvblox_node/static_map_slice"
+        convert_to_binary_costmap: True
+        max_obstacle_distance: 1.0
+        inflation_distance: 0.5
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 5.0        # ⭐ 3.0→5.0 (local과 동일 — inflation decay 가속)

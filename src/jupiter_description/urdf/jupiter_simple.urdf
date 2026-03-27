@@ -216,7 +216,8 @@
     <parent link="base_link"/>
     <child link="camera_link"/>
     <!-- 사용자 측정값: X=27.4cm(0.274), Z=5.5cm(0.055) -->
-    <origin xyz="0.274 0 0.055" rpy="0 0 0"/>
+    <!--<origin xyz="0.274 0 0.055" rpy="0 0 0"/> -->
+    <origin xyz="0.205 0 0.098" rpy="0 0 0"/> <!-- 카메라 전방 설치: 물리적 위치와 방향 정의 -->
   </joint>
   
 </robot>

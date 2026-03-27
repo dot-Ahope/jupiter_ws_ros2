@@ -1,8 +1,8 @@
 /**:
   ros__parameters:
     Kp: 0.8                 # Proportional gain
-    Ki: 0.02                # ⭐ 0.06→0.02 [2026-03-20] 방안A-4 후 적분 누적 과다→방향전환 지연→헌팅. 3x 감소
-    Kd: 0.3                 # ⭐ 0.5→0.3 [2026-03-20] incremental PID Kd가 출력 변화 저항→감속 지연. 0.3으로 완화
+    Ki: 0.06                # 0.06 유지 [2026-03-20 원복] PID는 헌팅 주원인 아님 확인 (DWB 데드존이 근본 원인)
+    Kd: 0.5                 # 0.5 유지 [2026-03-20 원복] 동상. min_speed_theta 0.30→0.15가 해결책
     linear_max: 1.0   # Maximum linear speed (0.0 ~ 0.45) - Increased for headroom
     angular_max: 2.0  # Maximum angular speed (0.0 ~ 2.0) - Increased for headroom
     linear_min: 0.0   # Minimum linear speed (0.0 ~ 0.45)
@@ -12,3 +12,18 @@
     imu_invert_x: false
     imu_invert_y: false
     imu_invert_z: true  # IMU Z축 (Yaw) 반전 - 실제 회전과 RViz 회전 방향 불일치 해결
+
+# /**:
+#   ros__parameters:
+#     Kp: 0.8                 # Proportional gain
+#     Ki: 0.02                # ⭐ 0.06→0.02 [2026-03-20] 방안A-4 후 적분 누적 과다→방향전환 지연→헌팅. 3x 감소
+#     Kd: 0.3                 # ⭐ 0.5→0.3 [2026-03-20] incremental PID Kd가 출력 변화 저항→감속 지연. 0.3으로 완화
+#     linear_max: 1.0   # Maximum linear speed (0.0 ~ 0.45) - Increased for headroom
+#     angular_max: 2.0  # Maximum angular speed (0.0 ~ 2.0) - Increased for headroom
+#     linear_min: 0.0   # Minimum linear speed (0.0 ~ 0.45)
+#     angular_min: 0.0  # Minimum angular speed (0.0 ~ 2.0)
+
+#     # IMU Inversion Parameters
+#     imu_invert_x: false
+#     imu_invert_y: false
+#     imu_invert_z: true  # IMU Z축 (Yaw) 반전 - 실제 회전과 RViz 회전 방향 불일치 해결

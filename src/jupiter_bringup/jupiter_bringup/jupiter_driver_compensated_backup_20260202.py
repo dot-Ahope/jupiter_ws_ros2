@@ -21,6 +21,21 @@ from . import arm_jupiter
 from .arm_jupiter import Jupiter_ARM
 
 class JupiterDriver(Node):
+    # Angular velocity scale factor (recalibrated 2026-03-19 for 방안A-4 ESC deadzone skip)
+    # MCU has internal gain causing over-rotation, compensate in both directions
+    # 방안A-4 후 ESC 매핑 변경 → MCU 게인 2.83→2.49 (Part2: 0.5rad/s×3s=85.9° 예상, 75.59° 실측)
+    # 보정: 0.353 × (85.9/75.59) = 0.401
+    ANGULAR_SCALE_FACTOR = 0.401  # 방안A-4 기준 재캘리브레이션
+
+    # 방안C: MCU 엔코더 분해능 한계 보정 (정지 회전 시 최소 각속도)
+    # 엔코더: 1320 pulse/rev, 10ms 측정주기 → 1 tick = 16.3 mm/s
+    # PID target < 16.3 mm/s → 0 tick과 1 tick 사이 진동 → 전진↔후진 반복 → 순회전 0
+    # MCU_MIN_ANGULAR = 0.12 → 19.7 mm/s → 1.21 ticks/period
+    # [2026-03-20] min_speed_theta=0.15 × SCALE(0.401) = 0.060 < 0.12 → 정지회전 시 0.12로 클램프됨
+    # → Nav2 등가 실효속도: 0.12/0.401 = 0.299 rad/s → DWB 10Hz 폐루프가 보상
+    # → DWB 교차점 6.7° < yaw_goal_tolerance 8.6° → 데드존 해소 [진행과정_2026_03_20.md §6 참조]
+    MCU_MIN_ANGULAR = 0.12
+    
     def __init__(self):
         super().__init__('jupiter_driver_compensated')
         
@@ -69,6 +84,10 @@ class JupiterDriver(Node):
                 description='Proportional gain'
             ))
             
+        # Ki: 0.06 유지 [2026-03-20 원복]
+        # 03-19에서 0.02로 변경 시도했으나, 03-20 분석에서 PID는 헌팅 주원인이 아님 확인 (DWB 데드존이 근본 원인)
+        # Ki 감소 → MCU 비례 응답 66% 감소 → 오히려 DWB-MCU 불일치 증가 → 악화
+        # YAML(jupiter_driver_params.yaml)에서 0.06으로 오버라이드되지만, 코드 기본값도 일치시킴
         self.declare_parameter('Ki', 0.06,
             ParameterDescriptor(
                 type=ParameterType.PARAMETER_DOUBLE,
@@ -79,7 +98,10 @@ class JupiterDriver(Node):
                 )],
                 description='Integral gain'
             ))
-            
+        
+        # Kd: 0.5 유지 [2026-03-20 원복]
+        # 03-19에서 0.3으로 변경 시도했으나, 03-20 분석에서 PID는 헌팅 주원인이 아님 확인
+        # YAML(jupiter_driver_params.yaml)에서 0.5로 오버라이드되지만, 코드 기본값도 일치시킴
         self.declare_parameter('Kd', 0.5,
             ParameterDescriptor(
                 type=ParameterType.PARAMETER_DOUBLE,
@@ -98,6 +120,22 @@ class JupiterDriver(Node):
 
         # IMU Enable/Disable Parameter
         self.declare_parameter('enable_imu', True)  # IMU 퍼블리싱 활성화
+
+        # IMU Gyro Scale Correction
+        # ICM20948 gyro_ratio=1/1000 in Rosmaster_Lib may be incorrect.
+        # MPU9250 uses 1/3754.9 — ratio: 1000/3754.9 ≈ 0.2663
+        # If MCU sends raw INT16 at ±500dps, correction = 1000/3754.9 ≈ 0.2663
+        # Use 1.0 for no correction, adjust after live verification.
+        self.declare_parameter('imu_gyro_scale', 1.0,
+            ParameterDescriptor(
+                type=ParameterType.PARAMETER_DOUBLE,
+                floating_point_range=[FloatingPointRange(
+                    from_value=0.01,
+                    to_value=10.0,
+                    step=0.001
+                )],
+                description='Gyro scale correction factor (applied to all axes)'
+            ))
 
 
         # Create publishers
@@ -177,79 +215,77 @@ class JupiterDriver(Node):
         return True
         
     def cmd_vel_callback(self, msg):
-        """Handle incoming velocity commands"""
+        """
+        Handle incoming velocity commands from Nav2 or teleop
+        
+        Note: MCU now has encoder feedback and PID control (CAR_DIFFERENTIAL mode)
+        - MCU PID automatically handles friction, inertia, battery voltage
+        - Driver applies angular velocity scaling due to MCU internal gain mismatch
+        - PID tuning is done via ROS2 parameters (Kp, Ki, Kd) which update MCU in real-time
+        
+        MCU Control Flow:
+        1. Differential_Ctrl() converts vx, angular → left/right motor speeds (±1000 range)
+        2. Motion_Set_Speed() sets target speeds for each motor
+        3. Motion_Get_Speed() reads wheel encoder feedback every 10ms
+        4. PID_Calc_Motor() computes error and adjusts PWM output automatically
+        5. Closed-loop control maintains accurate speed regardless of load/friction
+        
+        Angular Velocity Calibration (2026-02-11):
+        - Test: angular = 1.0 rad/s for 10 seconds
+        - Expected: 1.59 rotations (10 rad ÷ 2π)
+        - Actual: 4.5 rotations (283% over-rotation)
+        - Correction factor: 1.59 / 4.5 = 0.353
+        
+        CRITICAL: Both command and feedback must use same scale factor!
+        - Command: Nav2_angular × SCALE → MCU
+        - Feedback: MCU_angular ÷ SCALE → Nav2 (see publish_velocity)
+        """
         try:
             # Get velocity commands from twist message
-            vx = msg.linear.x  # m/s
-            vy = msg.linear.y  # m/s (ignored for differential)
-            angular = msg.angular.z  # rad/s
+            vx = msg.linear.x       # m/s - forward/backward linear velocity
+            vy = msg.linear.y       # m/s - lateral velocity (ignored for differential drive)
+            angular = msg.angular.z # rad/s - rotational velocity (CCW positive)
             
-            # --- Compensation for Squared Turn Ratio in MCU ---
-            # MCU Logic: Output ∝ (V_z_sent / 5000)^2
-            # Feedback Round 4 Data:
-            # - Input 1.0 -> 1.9 laps/10s = 1.19 rad/s (Too Fast)
-            # - Input 2.0 -> 3.0 laps/10s = 1.88 rad/s (Slightly Slow)
+            # Apply angular velocity scaling correction
+            # MCU's set_car_motion() has internal gain that causes ~2.83x over-rotation
+            # Scale down to match commanded rad/s to actual rad/s
+            angular_corrected = angular * self.ANGULAR_SCALE_FACTOR
             
-            # Physical Model Fitting (Omega = K * (V^2 - Friction)):
-            # 1. 1.19 = K * (V_1^2 - F) => V_1 was ~0.427
-            # 2. 1.88 = K * (V_2^2 - F) => V_2 was ~0.492
-            # Result: K ~ 11.5, Friction_SQ ~ 0.079 (Bias ~ 0.28)
+            # ESC 데드존은 펌웨어 방안A-4 (ESC deadzone skip)가 처리
+            # PID 출력≠0이면 즉시 ESC 111/105로 점프 → 적분 지연 없음
             
-            # New Target Equation (Identity):
-            # --- Linear Mapping for MCU (No Squaring) ---
-            # MCU 업데이트 (2026-02-03): turn_ratio 제곱 로직 제거
-            # 드라이버 개선 (v4): 주행 상태별 마찰 보상 차별화 (Dynamic vs Static)
-            # 문제: 주행 중 비정상 진동 (Oscillation) 발생
-            # 원인: 주행 중(wheels rolling)에는 마찰력이 낮은데, 정지마찰용 고토크(Bias 0.13)를 적용하여 과회전 발생
-            #
-            # 해결: 선속도(vx) 유무에 따라 Bias 이원화
-            # 1. 제자리 회전 (vx ≈ 0): High Bias (0.13) → 정지마찰 극복
-            # 2. 주행 중 회전 (vx > 0): Low Bias (0.05) → 부드러운 조향
-            # 
-            # 타겟 기준점 (1.0 rad/s = Output 0.241)은 동일하게 유지
+            # 방안C: MCU 엔코더 분해능 한계 보정 (정지 회전 전용)
+            # 정지(vx≈0): 양 바퀴 0 ticks → 작은 angular는 0↔1 tick 진동 → 순회전 0
+            # 전진(vx>0): 양 바퀴 이미 다수 ticks → 작은 차이도 PID 추적 가능 → 클램프 불필요
+            # 전진 중 클램프하면 DWB 헤딩보정이 2~3배 증폭되어 오버슈트→헌팅 발생!
+            if abs(vx) < 0.02:  # 정지 상태에서만 클램프
+                if abs(angular_corrected) > 0.001 and abs(angular_corrected) < self.MCU_MIN_ANGULAR:
+                    angular_corrected = math.copysign(self.MCU_MIN_ANGULAR, angular_corrected)
             
-            abs_angular = abs(angular)
-            abs_vx = abs(vx)
+            # Apply minimal deadband to reduce command jitter and motor noise
+            # Small values near zero often result from Nav2 controller noise
+            if abs(vx) < 0.001:
+                vx = 0.0
+            if abs(angular_corrected) < 0.001:
+                angular_corrected = 0.0
             
-            if abs_angular < 0.001:
-                angular_comp = 0.0
-            else:
-                # 상태별 파라미터 결정
-                if abs_vx > 0.01:
-                    # 동적 마찰 (주행 중)
-                    BIAS = 0.05     # 주행 중에는 적은 힘으로도 회전 가능
-                    SLOPE = 0.191   # (0.241 - 0.05)
-                    mode_str = "Dynamic"
-                else:
-                    # 정적 마찰 (제자리)
-                    BIAS = 0.13     # 정지 상태에서는 큰 힘 필요
-                    SLOPE = 0.111   # (0.241 - 0.13)
-                    mode_str = "Static"
-                
-                angular_comp = (abs_angular * SLOPE) + BIAS
-                
-                # 방향 복원
-                if angular < 0:
-                    angular_comp = -angular_comp
-
-            # Log debug info periodically
-            if not hasattr(self, 'debug_count'): self.debug_count = 0
-            self.debug_count = (self.debug_count + 1) % 50
-            if self.debug_count == 0 and abs(angular) > 0.01:
-                 self.get_logger().info(f"Nav2 In: {angular:.3f} (vx:{vx:.2f}) -> Out: {angular_comp:.3f} ({mode_str})")
-
-            # --- End Compensation ---
-
-            # Save last command for fake odometry
+            # Save last command timestamp for odometry and timeout detection
             self.last_cmd_vel = msg
             self.last_cmd_time = self.get_clock().now()
             
-            # Use Rosmaster's set_car_motion for direct velocity control
-            # Pass compensated angular velocity
-            self.bot.set_car_motion(vx, vy, angular_comp)
+            # Send velocity command to MCU with corrected angular velocity
+            # MCU's PID controller will handle all low-level control:
+            # - Converts velocity → target encoder counts
+            # - Measures actual wheel speeds via encoders
+            # - Adjusts motor PWM to minimize error
+            # - Compensates for friction, load, battery voltage automatically
+            self.bot.set_car_motion(vx, vy, angular_corrected)
             
-            # Debug output (optional)
-            # self.get_logger().info(f'Params Comp: angular={angular:.3f}, angular_comp={angular_comp:.3f}')
+            # Optional: Log commands for debugging (disabled by default)
+            # if abs(vx) > 0.01 or abs(angular) > 0.01:
+            #     self.get_logger().info(
+            #         f'cmd_vel: vx={vx:.3f} m/s, angular={angular:.3f} → {angular_corrected:.3f} rad/s'
+            #     )
             
         except Exception as e:
             self.get_logger().error(f'Failed to set velocity: {str(e)}')
@@ -359,6 +395,23 @@ class JupiterDriver(Node):
                 0.0, 0.0, accel_cov
             ]
             
+            # Apply IMU gyro scale correction
+            # (ICM20948 gyro_ratio may be wrong — adjust via parameter)
+            gyro_scale = self.get_parameter('imu_gyro_scale').value
+            gx = gx * gyro_scale
+            gy = gy * gyro_scale
+            gz = gz * gyro_scale
+
+            # Apply IMU axis inversion if configured
+            # (jupiter_driver_params.yaml에서 imu_invert_z: true로 설정됨
+            #  — IMU Z축이 물리적으로 아래를 향해 있어 angular_velocity.z 부호 반전 필요)
+            if self.get_parameter('imu_invert_x').value:
+                gx = -gx
+            if self.get_parameter('imu_invert_y').value:
+                gy = -gy
+            if self.get_parameter('imu_invert_z').value:
+                gz = -gz
+
             msg.angular_velocity.x = gx
             msg.angular_velocity.y = gy
             msg.angular_velocity.z = gz
@@ -384,39 +437,51 @@ class JupiterDriver(Node):
                  self.zero_data_count = 0
             
     def publish_velocity(self):
-        """Publish Current Velocity data"""
+        """
+        Publish current velocity feedback from MCU encoders
+        
+        CRITICAL: Apply inverse scaling to angular velocity feedback!
+        - MCU reports actual wheel angular velocity (after scaling)
+        - Nav2 expects velocity in its command reference frame
+        - Without inverse scaling, Nav2 thinks robot is rotating slower than commanded
+        - This causes over-rotation as Nav2 keeps sending larger commands
+        
+        Example:
+        - Nav2 commands: 1.0 rad/s
+        - Driver sends to MCU: 1.0 × 0.353 = 0.353
+        - MCU rotates at: 0.353 rad/s (actual)
+        - MCU reports back: vz = 0.353
+        - Driver MUST report: 0.353 ÷ 0.353 = 1.0 (back to Nav2 frame)
+        - Nav2 sees: "I commanded 1.0, getting 1.0, good!"
+        """
         try:
-            # Get velocity data from robot
-            # Note: Rosmaster behavior depends on firmware; check if this returns measured vel
-            # Assuming get_motion_data returns current measured velocity
-            # If not available, we might need to rely on command or encoder feedback if exposed
+            # Get velocity feedback from MCU encoder measurements
+            vx = self.bot._Rosmaster__vx  # Linear velocity (m/s)
+            vy = self.bot._Rosmaster__vy  # Lateral velocity (m/s)
+            vz = self.bot._Rosmaster__vz  # Angular velocity (rad/s) - MCU scaled
             
-            # Looking at Rosmaster_Lib, get_motion_data doesn't seem to exist or is different.
-            # Using 'get_motion_data' from library if available, otherwise skip.
-            # Actually, the library has read_data packets.
-            # But let's check what's available.
-            # If standard API doesn't have it, we might need to rely on encoders.
+            # MCU encoder reports inverted linear velocity direction:
+            #   cmd_vel linear.x = +0.2 (forward) → MCU encoder vx = -0.2
+            #   cmd_vel linear.x = -0.2 (backward) → MCU encoder vx = +0.2
+            # Negate vx to match ROS convention (positive = forward)
+            vx = -vx
             
-            # Since I can't check the library fully, I will assume we can't easily get feedback 
-            # without deeper changes. However, the user asked to fix the specific issue.
-            # I will just implement the structure.
-            
-            # If we want to publish feedback, checking Rosmaster_Lib for access to vx, vy, vz
-            # exposed by the thread.
-            
-            vx = self.bot._Rosmaster__vx
-            vy = self.bot._Rosmaster__vy
-            vz = self.bot._Rosmaster__vz
+            # Apply inverse scaling to angular velocity for Nav2 feedback
+            # This ensures command-feedback consistency in Nav2's reference frame
+            if self.ANGULAR_SCALE_FACTOR > 0.001:  # Avoid division by zero
+                vz_scaled = vz / self.ANGULAR_SCALE_FACTOR
+            else:
+                vz_scaled = vz
             
             msg = Twist()
             msg.linear.x = float(vx)
             msg.linear.y = float(vy)
-            msg.angular.z = float(vz)
+            msg.angular.z = float(vz_scaled)  # Inverse scaled for consistency
             
             self.vel_pub.publish(msg)
             
         except Exception as e:
-            # self.get_logger().warn(f"Failed to publish velocity: {str(e)}")
+            # Silently fail to avoid log spam
             pass
 
     def RobotArmCallback(self, request, response):

@@ -26,7 +26,7 @@ class DeviceService(Node):
         )
         
         # 파라미터 선언
-        self.declare_parameter('camera_device', 'astra')
+        self.declare_parameter('camera_device', 'usb')
         self.declare_parameter('image_width', 640)
         self.declare_parameter('image_height', 480)
         self.declare_parameter('camera_fps', 30)
@@ -55,30 +55,23 @@ class DeviceService(Node):
         self.cap = None
         
         try:
-            if camera_device == 'astra':
-                # Astra 카메라는 ros2_astra_camera 패키지에서 처리하므로
-                # device_srv는 카메라를 열지 않음
-                self.get_logger().info('Astra mode: camera handled by astra_camera_node')
+            # USB 2.0 카메라 사용 (/dev/video0 또는 /dev/video1)
+            for device_id in [0, 1]:
+                self.cap = cv2.VideoCapture(device_id)
+                if self.cap.isOpened():
+                    self.get_logger().info(f'USB camera opened: /dev/video{device_id}')
+                    break
+                self.cap = None
+            
+            if self.cap is None:
+                self.get_logger().error('Failed to open camera device')
                 return
-            else:
-                # USB 2.0 카메라 사용 (/dev/video0 또는 /dev/video1)
-                # /dev/video2가 없으므로 /dev/video0부터 시도
-                for device_id in [0, 1]:
-                    self.cap = cv2.VideoCapture(device_id)
-                    if self.cap.isOpened():
-                        self.get_logger().info(f'USB camera opened: /dev/video{device_id}')
-                        break
-                    self.cap = None
-                
-                if self.cap is None:
-                    self.get_logger().error('Failed to open camera device')
-                    return
-                
-                # 카메라 설정
-                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-                
-                self.get_logger().info(f'Camera initialized: USB 2.0 Camera ({width}x{height})')
+            
+            # 카메라 설정
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+            
+            self.get_logger().info(f'Camera initialized: USB 2.0 Camera ({width}x{height})')
             
         except Exception as e:
             self.get_logger().error(f'Camera initialization failed: {str(e)}')

@@ -180,7 +180,10 @@ def generate_launch_description():
     # 5. Base Node (Wheel Odometry Dead-Reckoning)
     # ============================================================
     # /jupiter/get_vel (Twist) → 적분 → /odom_raw (Odometry, 공분산=0)
-    # use_imu_for_odom=true: angular velocity를 IMU에서 가져옴
+    # [2026-03-24] use_imu_for_odom=False: 엔코더 angular velocity 사용
+    # 이유: True이면 odom0(vyaw)와 imu0(vyaw)가 동일한 IMU 데이터 → 이중 주입
+    #       → IMU gyro 잔류 바이어스가 무한 누적 → 분당 ~17° yaw 드리프트
+    #       False: 엔코더 vyaw(바이어스 없음) + IMU vyaw = 독립 2소스 → EKF가 크로스 보정
     jupiter_base = Node(
         package='jupiter_base',
         executable='base_node',
@@ -188,8 +191,8 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'linear_scale': 1.0,
-            'angular_scale': 2.0251,     # IMU 미사용 시 fallback (사용 안 됨)
-            'use_imu_for_odom': True,    # ← IMU angular velocity 사용
+            'angular_scale': 1.0,        # jupiter_driver_compensated.py가 이미 역스케일링 적용 (÷0.401)
+            'use_imu_for_odom': False,   # ← 엔코더 angular velocity 사용 (IMU는 imu0에서 별도 융합)
             'is_multi_robot': False
         }]
     )
@@ -425,6 +428,20 @@ def generate_launch_description():
                 '/visual_slam/tracking/odometry_adapted',  # VSLAM odom (디버깅용)
                 '/imu/data_calibrated',  # IMU calibrated (gyro scale 진단)
                 '/jupiter/imu',          # IMU raw from driver (gyro scale 진단)
+                # nvblox 관련 — nvblox Foxglove extension 설치됨
+                # extension이 nvblox_msgs/Mesh → SceneUpdate,
+                #             nvblox_msgs/VoxelBlockLayer → SceneUpdate 변환 처리
+                # Docker publish_layer_rate_hz=0.5, update_mesh_rate_hz=2.0
+                # 총 nvblox Foxglove 대역폭: ~1.1 MB/s (send_buffer_limit 10MB 이내)
+                '/nvblox_node/mesh',                    # 3D 메쉬 (extension→SceneUpdate, ~438KB/s@2Hz)
+                '/nvblox_node/color_layer',             # 3D 복셀 지도 (extension→SceneUpdate, ~255KB/s@0.5Hz)
+                '/nvblox_node/static_esdf_pointcloud',  # 2D ESDF 포인트클라우드 (~398KB/s)
+                '/nvblox_node/esdf_slice_bounds',       # ESDF 범위 마커 (≈0)
+                # ❌ 제거됨 (대역폭 과다 또는 미발행):
+                # '/nvblox_node/tsdf_layer',          # VoxelBlockLayer (color_layer와 중복)
+                # '/nvblox_node/.*_layer',            # regex → 4토픽 매칭, 대역폭 폭발
+                # '/nvblox_node/combined_esdf_pointcloud', # 미발행 (static_tsdf 모드)
+                # '/nvblox_node/human_voxels',        # static_tsdf 모드 미발행
                 # Nav2 관련
                 '/local_costmap/costmap',
                 '/global_costmap/costmap',
