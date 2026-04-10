@@ -1,3 +1,10 @@
+# === 시리얼 장치 symlink ===
 KERNEL=="ttyUSB*", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", MODE="0777", SYMLINK+="myserial"
-KERNEL=="ttyUSB*", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6015", MODE="0777", SYMLINK+="myserial"
+KERNEL=="ttyUSB*", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6015", MODE="0777", SYMLINK+="rtk_gps"
 KERNEL=="ttyUSB*", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", MODE="0777", SYMLINK+="lidar_port"
+
+# === USB 허브 autosuspend 비활성화 (부팅 시 장치 인식 실패 방지) ===
+# Realtek 4-Port USB 2.0 Hub
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="0bda", ATTR{idProduct}=="5489", ATTR{power/autosuspend_delay_ms}="-1", ATTR{power/control}="on"
+# Terminus Technology 4-Port Hub
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="1a40", ATTR{idProduct}=="0101", ATTR{power/autosuspend_delay_ms}="-1", ATTR{power/control}="on"

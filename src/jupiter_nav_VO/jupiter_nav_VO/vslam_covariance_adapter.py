@@ -100,6 +100,12 @@ class VslamCovarianceAdapter(Node):
         self.declare_parameter('frozen_pos_tolerance', 1e-6)    # m - 위치 변화 없음 판정 기준
         self.declare_parameter('frozen_yaw_tolerance', 1e-6)    # rad - yaw 변화 없음 판정 기준
         self.declare_parameter('frozen_publish_rate', 1.0)      # Hz - frozen 상태에서 발행 주파수 (0=완전차단)
+        self.declare_parameter('frozen_cov_multiplier', 50.0)   # frozen 발행 시 공분산 증폭 배율 (EKF가 사실상 무시)
+
+        # Adaptive delta threshold after unfreeze (2026-04-06)
+        # frozen 기간 동안 로봇이 이동했을 수 있으므로 unfreeze 직후 delta 임계값을 완화
+        self.declare_parameter('max_robot_speed', 0.5)          # m/s - 로봇 최대 속도 (adaptive delta 계산용)
+        self.declare_parameter('estimated_frame_rate', 25.0)    # Hz - VSLAM 수신 주파수 추정 (frozen 시간 계산용)
 
         # 공통 복구 파라미터
         self.declare_parameter('recovery_delay', 1.0)           # 복구 후 대기 시간 (초)
@@ -132,6 +138,9 @@ class VslamCovarianceAdapter(Node):
         self.frozen_pos_tolerance = self.get_parameter('frozen_pos_tolerance').value
         self.frozen_yaw_tolerance = self.get_parameter('frozen_yaw_tolerance').value
         self.frozen_publish_rate = self.get_parameter('frozen_publish_rate').value
+        self.frozen_cov_multiplier = self.get_parameter('frozen_cov_multiplier').value
+        self.max_robot_speed = self.get_parameter('max_robot_speed').value
+        self.estimated_frame_rate = self.get_parameter('estimated_frame_rate').value
 
         # 6x6 공분산 행렬의 대각 인덱스
         self.pose_diag_indices = [0, 7, 14, 21, 28, 35]
@@ -166,6 +175,7 @@ class VslamCovarianceAdapter(Node):
         self.frozen_gated_count = 0     # frozen으로 gate된 총 횟수
         self.frozen_published_count = 0 # frozen 상태에서 downsample 발행된 횟수
         self.last_frozen_publish_time = 0.0  # 마지막 frozen downsample 발행 시각
+        self.frozen_duration = 0        # 마지막 frozen 기간 (프레임 수, unfreeze 시 adaptive delta용)
 
         # ============================================================
         # vo_state 상태 (선택적)
@@ -209,10 +219,13 @@ class VslamCovarianceAdapter(Node):
             f'good_count_threshold={self.good_count_threshold}\n'
             f'  frozen detection: threshold={self.frozen_threshold} msgs, '
             f'pos_tol={self.frozen_pos_tolerance}m, yaw_tol={self.frozen_yaw_tolerance}rad, '
-            f'downsample={self.frozen_publish_rate}Hz\n'
+            f'downsample={self.frozen_publish_rate}Hz, '
+            f'frozen_cov_mult={self.frozen_cov_multiplier}x\n'
             f'  recovery: delay={self.recovery_delay}s, '
             f'cov_multiplier={self.recovery_cov_multiplier}x, '
             f'decay_time={self.recovery_cov_decay_time}s\n'
+            f'  adaptive delta: max_robot_speed={self.max_robot_speed}m/s, '
+            f'est_frame_rate={self.estimated_frame_rate}Hz\n'
             f'  auto-recovery: reset_after={self.anomaly_reset_count} anomalies, '
             f'stable_threshold={self.stable_interframe_threshold}m, '
             f'stable_count={self.stable_interframe_count}\n'
@@ -260,9 +273,13 @@ class VslamCovarianceAdapter(Node):
     # ================================================================
     def _check_frozen(self, msg: Odometry) -> bool:
         """
-        Frozen data detection (2026-03-04).
+        Frozen data detection (2026-03-04, 2026-04-06 prev_odom 보호 추가).
         cuVSLAM이 tracking lost 시 마지막 pose를 계속 발행하는 경우 감지.
-        연속 frozen_threshold 회 동일 pose → anomaly.
+        연속 frozen_threshold 회 동일 pose → frozen 판정.
+
+        중요: frozen 판정 시 prev_odom을 업데이트하지 않음.
+        이를 통해 unfreeze 후 anomaly 판정에서 "마지막 실제 움직임"
+        기준으로 delta를 계산할 수 있음.
 
         Returns True if data is frozen (should gate).
         """
@@ -272,7 +289,7 @@ class VslamCovarianceAdapter(Node):
 
         pose = msg.pose.pose
 
-        # 위치 변화량
+        # 위치 변화량 (prev_odom 기준 — frozen 중에도 prev_odom은 마지막 실제 움직임 시점)
         dx = pose.position.x - self.prev_odom.position.x
         dy = pose.position.y - self.prev_odom.position.y
         pos_delta = math.sqrt(dx * dx + dy * dy)
@@ -290,6 +307,7 @@ class VslamCovarianceAdapter(Node):
 
         if pos_delta < self.frozen_pos_tolerance and yaw_delta < self.frozen_yaw_tolerance:
             self.frozen_count += 1
+            # ★ prev_odom 업데이트하지 않음 — frozen pose로 기준점이 오염되는 것 방지
             if self.frozen_count == self.frozen_threshold:
                 self.get_logger().warn(
                     f'VSLAM FROZEN: {self.frozen_count} consecutive identical poses '
@@ -299,8 +317,11 @@ class VslamCovarianceAdapter(Node):
             return self.frozen_count >= self.frozen_threshold
         else:
             if self.frozen_count >= self.frozen_threshold:
+                # ★ frozen 기간 기록 → unfreeze 직후 adaptive delta 임계값에 사용
+                self.frozen_duration = self.frozen_count
                 self.get_logger().info(
-                    f'VSLAM unfrozen after {self.frozen_count} identical msgs. '
+                    f'VSLAM unfrozen after {self.frozen_count} identical msgs '
+                    f'({self.frozen_count / max(self.estimated_frame_rate, 1.0):.1f}s). '
                     f'pos_delta={pos_delta:.6f}m, yaw_delta={math.degrees(yaw_delta):.3f}°'
                 )
             self.frozen_count = 0
@@ -339,23 +360,45 @@ class VslamCovarianceAdapter(Node):
         dy = pose.position.y - self.prev_odom.position.y
         pos_delta = math.sqrt(dx * dx + dy * dy)
 
+        # ★ Adaptive delta threshold (2026-04-06)
+        # frozen 기간 동안 로봇이 이동했을 수 있으므로, unfreeze 직후
+        # delta 임계값을 frozen 기간에 비례하여 완화
+        effective_max_pos = self.max_pos_delta
+        effective_max_yaw = self.max_yaw_delta
+        if self.frozen_duration > 0:
+            frozen_time_sec = self.frozen_duration / max(self.estimated_frame_rate, 1.0)
+            effective_max_pos = self.max_pos_delta + frozen_time_sec * self.max_robot_speed
+            # yaw: 로봇 최대 회전속도 ~1 rad/s 가정
+            effective_max_yaw = self.max_yaw_delta + frozen_time_sec * 1.0
+            # ★ 상한 캡: 비합리적으로 큰 adaptive threshold 방지 (2026-04-06)
+            MAX_ADAPTIVE_YAW = 0.5   # ~28.6° — 실제 로봇이 1프레임에 넘길 수 없는 값
+            MAX_ADAPTIVE_POS = 2.0   # 2m — max_robot_speed 0.5m/s × 4s 한계
+            effective_max_yaw = min(effective_max_yaw, MAX_ADAPTIVE_YAW)
+            effective_max_pos = min(effective_max_pos, MAX_ADAPTIVE_POS)
+            self.get_logger().debug(
+                f'Adaptive delta: frozen={self.frozen_duration} frames '
+                f'({frozen_time_sec:.1f}s), max_pos={effective_max_pos:.2f}m, '
+                f'max_yaw={math.degrees(effective_max_yaw):.1f}°'
+            )
+            self.frozen_duration = 0  # 한 번만 적용
+
         # 기준점 업데이트 + anomaly 판정
         is_anomaly = False
 
-        if yaw_delta > self.max_yaw_delta:
+        if yaw_delta > effective_max_yaw:
             is_anomaly = True
             if not self.anomaly_detected:
                 self.get_logger().warn(
                     f'Anomaly: yaw delta={math.degrees(yaw_delta):.1f}° '
-                    f'> {math.degrees(self.max_yaw_delta):.1f}° threshold'
+                    f'> {math.degrees(effective_max_yaw):.1f}° threshold'
                 )
 
-        if pos_delta > self.max_pos_delta:
+        if pos_delta > effective_max_pos:
             is_anomaly = True
             if not self.anomaly_detected:
                 self.get_logger().warn(
                     f'Anomaly: position delta={pos_delta:.3f}m '
-                    f'> {self.max_pos_delta}m threshold'
+                    f'> {effective_max_pos:.2f}m threshold'
                 )
 
         # prev_odom 업데이트: 정상 시에만 (2026-03-10 재수정)
@@ -483,18 +526,22 @@ class VslamCovarianceAdapter(Node):
         # 1) Frozen data detection (2026-03-04)
         is_frozen = self._check_frozen(msg)
 
-        # 2) Anomaly detection (항상 수행)
-        is_anomaly = self._check_anomaly(msg)
+        # 2) Anomaly detection + tracking 상태 관리
+        #    ★ 2026-04-06: frozen일 때 anomaly check/state update를 SKIP
+        #    frozen 프레임은 delta=0이므로 anomaly 상태머신에 "정상"으로 인식되어
+        #    consecutive_good을 증가시키고 prev_odom을 stale pose로 오염시킴.
+        #    frozen은 "추적 성공"이 아니라 "추적 불명"이므로 상태머신에서 분리.
+        if not is_frozen:
+            is_anomaly = self._check_anomaly(msg)
+            self._update_tracking_state(is_anomaly)
+        else:
+            is_anomaly = False
+            # frozen 중에도 auto-recovery 용 raw pose는 추적
+            self.last_raw_pose = msg.pose.pose
 
-        # 3) Tracking 상태 관리 (anomaly만 반영, frozen은 별도 처리)
-        #    frozen은 "정지 상태"와 "추적 실패 stale data"를 구분할 수 없으므로
-        #    tracking 복구 판정(consecutive_good)을 방해하지 않도록 분리.
-        #    → frozen일 때: 메시지는 발행하지 않되, tracking 상태는 anomaly만으로 판단
-        self._update_tracking_state(is_anomaly)
-
-        # 4) 게이팅 판정: frozen이면 downsample (중복 데이터 EKF 과투입 방지)
-        #    완전 차단 시 Foxglove 데이터 없음 + EKF에 VSLAM 위치 전달 중단
-        #    → frozen_publish_rate(기본 1Hz)로 저주파 발행
+        # 3) 게이팅 판정: frozen이면 downsample (중복 데이터 EKF 과투입 방지)
+        #    ★ 2026-04-06: frozen 발행 시 공분산 대폭 증가 (frozen_cov_multiplier)
+        #    EKF differential 모드에서 Δ=0 stale data의 영향을 최소화
         if is_frozen:
             now_sec = time.monotonic()
             if self.frozen_publish_rate > 0:
@@ -502,14 +549,15 @@ class VslamCovarianceAdapter(Node):
                 if (now_sec - self.last_frozen_publish_time) >= interval:
                     self.last_frozen_publish_time = now_sec
                     self.frozen_published_count += 1
-                    # frozen downsample: 공분산 보정 후 발행 (아래로 진행)
-                    pass  # fall through to covariance correction and publish
+                    # ★ Frozen 발행: 공분산 대폭 증가 후 발행
+                    self._publish_with_frozen_covariance(msg)
+                    return
                 else:
                     self.gated_count += 1
                     self.frozen_gated_count += 1
                     return
             else:
-                # frozen_publish_rate=0: 완전 차단 (이전 동작)
+                # frozen_publish_rate=0: 완전 차단
                 self.gated_count += 1
                 self.frozen_gated_count += 1
                 return
@@ -553,6 +601,30 @@ class VslamCovarianceAdapter(Node):
         msg.twist.covariance = twist_cov
 
         # 6) 재발행
+        self.odom_pub.publish(msg)
+        self.published_count += 1
+
+    # ================================================================
+    # Frozen 발행 (공분산 증폭)
+    # ================================================================
+    def _publish_with_frozen_covariance(self, msg: Odometry):
+        """
+        Frozen 상태에서 downsample 발행 시, 공분산을 대폭 증가시켜
+        EKF가 이 stale 데이터를 사실상 무시하도록 함.
+        Foxglove 모니터링 데이터는 유지.
+        """
+        pose_cov = list(msg.pose.covariance)
+        for i, diag_idx in enumerate(self.pose_diag_indices):
+            base_cov = max(abs(pose_cov[diag_idx]), self.min_pose_cov_diag[i])
+            pose_cov[diag_idx] = base_cov * self.frozen_cov_multiplier
+        msg.pose.covariance = pose_cov
+
+        twist_cov = list(msg.twist.covariance)
+        for i, diag_idx in enumerate(self.twist_diag_indices):
+            base_cov = max(abs(twist_cov[diag_idx]), self.min_twist_cov_diag[i])
+            twist_cov[diag_idx] = base_cov * self.frozen_cov_multiplier
+        msg.twist.covariance = twist_cov
+
         self.odom_pub.publish(msg)
         self.published_count += 1
 

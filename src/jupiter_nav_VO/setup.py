@@ -28,6 +28,7 @@ setup(
             'vslam_covariance_adapter = jupiter_nav_VO.vslam_covariance_adapter:main',
             'rf2o_covariance_adapter = jupiter_nav_VO.rf2o_covariance_adapter:main',
             'goal_pose_restamper = jupiter_nav_VO.goal_pose_restamper:main',
+            'gnss_quality_filter = jupiter_nav_VO.gnss_quality_filter:main',
             #odom_covariance_adapter: 사용자가 터미널에 입력할 커맨드(명령어) 이름입니다.
             # jupiter_nav_VO.odom_covariance_adapter: 실행될 파이썬 모듈(파일) 경로입니다.
             # main: 해당 파일 안에 정의된 main이라는 이름의 함수를 실행하라는 뜻입니다.

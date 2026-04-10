@@ -183,6 +183,8 @@ class JupiterDriver(Node):
         # Create timers - IMU 데이터의 빈도 더 높게 설정
         self.create_timer(0.01, self.publish_imu)  # 100Hz (0.01s)
         self.create_timer(0.02, self.publish_velocity)  # 50Hz (0.02s) - 10Hz에서 증가
+        self.create_timer(5.0, self.check_serial_health)  # 5초마다 시리얼 상태 확인
+        self._serial_was_ok = True  # 최초 상태 추적 (로그 중복 방지)
         
         # Initialize PID parameters
         try:
@@ -212,6 +214,18 @@ class JupiterDriver(Node):
                     self.get_logger().error(f"Failed to update PID parameters: {str(e)}")
         return True
         
+    def check_serial_health(self):
+        """주기적 시리얼 상태 확인 — 단절 감지 시 ROS 로그 출력"""
+        is_ok = self.bot.is_serial_ok()
+        if not is_ok and self._serial_was_ok:
+            self.get_logger().error(
+                'USB serial disconnected! MCU communication lost. '
+                'Rosmaster_Lib will auto-reconnect when device reappears.')
+        elif is_ok and not self._serial_was_ok:
+            self.get_logger().info(
+                'USB serial reconnected! MCU communication restored.')
+        self._serial_was_ok = is_ok
+
     def cmd_vel_callback(self, msg):
         """
         Handle incoming velocity commands from Nav2 or teleop
@@ -374,7 +388,7 @@ class JupiterDriver(Node):
             
             # 적절한 공분산 값 설정 (노이즈 수준 추정)
             accel_cov = 0.01  # 가속도 측정 불확실성 (m/s^2)^2
-            gyro_cov = 0.001  # 각속도 측정 불확실성 (rad/s)^2
+            gyro_cov = 0.005  # 각속도 측정 불확실성 (rad/s)^2 — 0.001→0.005: Wheel vyaw 비중 ↑
             
             # 초기 공분산 행렬 설정
             msg.orientation_covariance = [-1.0] * 9  # 방향은 여전히 제공되지 않음

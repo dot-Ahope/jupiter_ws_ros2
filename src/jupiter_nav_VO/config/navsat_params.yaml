@@ -1,0 +1,33 @@
+# =============================================================================
+# NavSat Transform Configuration
+# =============================================================================
+#
+# robot_localization의 navsat_transform_node 설정
+# GPS(WGS84 위경도)를 odom 프레임 좌표로 변환
+#
+# 입력:
+#   - /fix_filtered (gnss_quality_filter가 품질 필터링한 NavSatFix)
+#   - /odom (EKF 출력 오도메트리)
+#   - /imu/data_calibrated (use_odometry_yaw=true이므로 실제로는 EKF yaw 사용)
+#
+# 출력:
+#   - /odometry/gps (odom 프레임 좌표의 GPS 위치 → EKF odom3)
+#   - /gps/filtered (디버깅용 WGS84 좌표)
+#
+# 주의:
+#   - MCU IMU에 자력계가 없으므로 use_odometry_yaw=true 필수
+#   - 2D 로봇이므로 zero_altitude=true
+#   - SLAM Toolbox가 map→odom을 담당하므로 broadcast_utm_transform=false
+# =============================================================================
+
+navsat_transform:
+  ros__parameters:
+    frequency: 30.0
+    delay: 0.0
+    magnetic_declination_radians: 0.0   # use_odometry_yaw=true이므로 미사용
+    yaw_offset: 0.0
+    zero_altitude: true                  # 2D 로봇 — 고도 무시
+    broadcast_utm_transform: false       # SLAM Toolbox가 map→odom 담당
+    publish_filtered_gps: true           # /gps/filtered 발행 (디버깅용)
+    use_odometry_yaw: true               # ⭐ MCU IMU에 자력계 없음 → EKF yaw 사용
+    wait_for_datum: false                # 첫 GPS fix를 원점으로 자동 설정

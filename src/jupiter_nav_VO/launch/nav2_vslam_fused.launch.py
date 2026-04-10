@@ -1,41 +1,44 @@
 #!/usr/bin/env python3
 # =============================================================================
-# VSLAM + RF2O + Wheel Odom + IMU + SLAM Toolbox 센서 융합 Launch 파일
+# VSLAM + RF2O + Wheel Odom + IMU + RTK GPS + SLAM Toolbox 센서 융합 Launch 파일
 # =============================================================================
 #
 # 아키텍처:
-#   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-#   │ Isaac VSLAM   │  │ RF2O LiDAR   │  │ Wheel Odom   │  │ IMU (Calib)  │
-#   │ /visual_slam/ │  │  Odometry    │  │ /odom_raw    │  │ /imu/data_   │
-#   │  tracking/    │  │ /odom_rf2o   │  │ (base_node)  │  │  calibrated  │
-#   │  odometry     │  │              │  │              │  │              │
-#   └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘
-#          │                 │                  │                  │
-#          │  ┌──────────────┤          ┌───────▼───────┐         │
-#          │  │              │          │ odom_cov_     │         │
-#          │  │              │          │ adapter       │         │
-#          │  │              │          │ /odom_adapted │         │
-#          │  │              │          └───────┬───────┘         │
-#          │  │              │                  │                  │
-#          └──┼──────────────┼──────────────────┼──────────────────┘
-#             │              ▼                  ▼
-#             │  ┌─────────────────────────────────────┐
-#             │  │  robot_localization (EKF)            │
-#             │  │  odom0: wheel, odom1: VSLAM,        │
-#             │  │  odom2: RF2O, imu0: IMU             │
-#             │  │  TF: odom → base_footprint          │
-#             │  └──────────────┬───────────────────────┘
-#             │                 │
-#   ┌─────────▼─────────┐      │
-#   │  RPLidar S2L       │     │
-#   │  /scan             │     │
-#   └─────────┬──────────┘     │
-#             │                │
-#   ┌─────────▼────────────────▼───┐
-#   │  SLAM Toolbox                │
-#   │  TF: map → odom              │
-#   │  /map                        │
-#   └──────────────────────────────┘
+#   ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐
+#   │ VSLAM    │ │ RF2O     │ │ Wheel    │ │ IMU      │ │ RTK GPS  │
+#   │ /visual_ │ │ /odom_   │ │ /odom_   │ │ /imu/    │ │ /fix     │
+#   │ slam/..  │ │ rf2o     │ │ raw      │ │ data_cal │ │(zed_f9p) │
+#   └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘
+#        │            │            │             │            │
+#        │            │     ┌──────▼──────┐      │     ┌──────▼──────┐
+#        │            │     │ odom_cov_   │      │     │ gnss_quality│
+#        │            │     │ adapter     │      │     │ _filter     │
+#        │            │     └──────┬──────┘      │     └──────┬──────┘
+#        │            │            │             │            │
+#        │            │            │             │     ┌──────▼──────┐
+#        │            │            │             │     │ navsat_     │
+#        │            │            │             │     │ transform   │
+#        │            │            │             │     │ /odom/gps   │
+#        │            │            │             │     └──────┬──────┘
+#        │            │            │             │            │
+#        └────────────┼────────────┼─────────────┼────────────┘
+#                     ▼            ▼             ▼
+#          ┌──────────────────────────────────────────┐
+#          │  robot_localization (EKF)                 │
+#          │  odom0: Wheel  odom1: VSLAM  odom2: RF2O │
+#          │  odom3: GPS    imu0: IMU                 │
+#          │  TF: odom → base_footprint               │
+#          └───────────────┬──────────────────────────┘
+#   ┌──────────┐           │
+#   │ RPLidar  │           │
+#   │ /scan    │           │
+#   └────┬─────┘           │
+#        │                 │
+#   ┌────▼─────────────────▼───┐
+#   │  SLAM Toolbox            │
+#   │  TF: map → odom          │
+#   │  /map                    │
+#   └──────────────────────────┘
 #
 # 사용법:
 #   ros2 launch jupiter_nav_VO nav2_vslam_fused.launch.py
@@ -92,6 +95,12 @@ def generate_launch_description():
         description='Port for the LiDAR device'
     )
     
+    use_gnss_arg = DeclareLaunchArgument(
+        'use_gnss', default_value='true',
+        description='Enable RTK GPS fusion (ZED-F9P). '
+                    'Disable for indoor-only testing without GPS hardware.'
+    )
+    
     # ============================================================
     # 1. Robot Description (URDF)
     # ============================================================
@@ -119,13 +128,14 @@ def generate_launch_description():
     # ============================================================
     # 2. Static TF: base_link → camera_link
     # ============================================================
-    # RealSense D455f 장착 위치 (사용자 실측값)
-    # X=0.274m (전방), Y=0m (중앙), Z=0.055m (높이)
+    # RealSense D455f 장착 위치 (URDF jupiter_simple.urdf와 동일)
+    # [2026-04-06] 수정: 0.274,0,0.055 → 0.205,0,0.098 (URDF 동기화)
+    # 구 값이 robot_state_publisher(URDF)의 TF를 간헐적 덮어쓰기 → nvblox 메시 z축 오류 원인
     tf_base_to_camera = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='base_to_camera_tf',
-        arguments=['0.274', '0', '0.055', '0', '0', '0', 'base_link', 'camera_link']
+        arguments=['0.205', '0', '0.098', '0', '0', '0', 'base_link', 'camera_link']
     )
     
     # ============================================================
@@ -259,16 +269,18 @@ def generate_launch_description():
             # Anomaly detection (2026-02-27: 항상 활성 — Docker 메시지 의존성 없음)
             'max_yaw_delta': 0.15,           # rad (~8.6°) 스텝당 최대 yaw 변화
             'max_pos_delta': 0.5,            # m 스텝당 최대 위치 변화
-            'good_count_threshold': 30,      # 연속 30회 정상 → tracking 복구 판정
-            # Frozen data detection (2026-03-16 조정)
-            # cuVSLAM은 ~60Hz 발행하지만 실제 새 pose는 ~10-15Hz
-            # 나머지는 이전 값 반복 → frozen_threshold=10이면 0.17초 만에 frozen
-            # → EKF가 VSLAM 보정을 거의 받지 못함 → 회전 시 yaw 발산
-            'frozen_threshold': 60,          # 60Hz × 1초 = 60 연속 동일 후 frozen 판정
-            'frozen_publish_rate': 10.0,     # frozen 시에도 10Hz로 발행 (기존 1Hz)
+            'good_count_threshold': 10,      # 연속 10회 정상 → tracking 복구 판정
+            # Frozen data detection (2026-04-06 emitter_on_off 대응 조정)
+            # emitter_on_off에서 cuVSLAM ~25Hz, 64% frozen → 빠른 감지 + 낮은 발행률
+            'frozen_threshold': 10,          # 25Hz × 0.4초 = 10 연속 동일 후 frozen 판정
+            'frozen_publish_rate': 1.0,      # frozen 시 1Hz downsample (stale Δ=0 최소화)
             'frozen_pos_tolerance': 1e-6,    # m - 위치 변화 없음 판정 기준
+            'frozen_cov_multiplier': 50.0,   # frozen 발행 시 공분산 50배 → EKF가 사실상 무시
+            # Adaptive delta threshold (2026-04-06)
+            'max_robot_speed': 0.5,          # m/s - frozen 후 허용 delta 계산용
+            'estimated_frame_rate': 25.0,    # Hz - emitter_on_off 실효 수신률
             # 공통 복구 파라미터
-            'recovery_delay': 1.0,           # tracking 복구 후 1초 대기
+            'recovery_delay': 0.5,           # tracking 복구 후 0.5초 대기
             'recovery_cov_multiplier': 5.0,  # 복구 직후 공분산 5배 증폭
             'recovery_cov_decay_time': 3.0,  # 3초에 걸쳐 1.0x로 수렴
         }]
@@ -355,7 +367,86 @@ def generate_launch_description():
     )
 
     # ============================================================
-    # 11. SLAM Toolbox (맵 생성 + map→odom TF)
+    # 11. RTK GPS (실외 절대 위치)
+    # ============================================================
+    # ZED-F9P RTK GPS → gnss_quality_filter → navsat_transform → EKF odom3
+    #
+    # 실내/실외 자동 판별:
+    #   - 실내 (NO_FIX/POOR): gnss_quality_filter가 /fix_filtered 미발행
+    #     → navsat_transform 입력 없음 → odom3 미발행 → EKF가 GPS 없이 동작
+    #   - 실외 (GPS/RTK): 품질에 따른 공분산으로 EKF에 위치 융합
+    #
+    # GPS 안테나 TF: base_link → gps_link
+    # ⚠️ 실제 GPS 안테나 장착 위치를 측정하여 아래 값 수정 필요
+    tf_base_to_gps = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='base_to_gps_tf',
+        arguments=['0', '0.098', '0.16', '0', '0', '0', 'base_link', 'gps_link'],
+        condition=IfCondition(LaunchConfiguration('use_gnss'))
+    )
+    
+    # ZED-F9P RTK GPS 드라이버
+    # /fix (NavSatFix) 발행 — NTRIP 보정 포함
+    zed_f9p_node = Node(
+        package='zed_f9p_rtk',
+        executable='zed_f9p_rtk_node',
+        name='zed_f9p_rtk',
+        output='screen',
+        parameters=[{
+            'port': '/dev/rtk_gps',
+            'baudrate': 460800,
+            'frame_id': 'gps_link',
+            'ntrip_server': 'www.gnssdata.or.kr',
+            'ntrip_port': 2101,
+            'ntrip_user': 'geektrck@gmail.com',
+            'ntrip_pass': 'gnss',
+            'ntrip_mountpoint': 'SUWN-RTCM32',
+        }],
+        condition=IfCondition(LaunchConfiguration('use_gnss'))
+    )
+    
+    # GNSS 품질 필터 (간소화): NO_FIX/POOR → 게이트아웃, 나머지 → 원본 공분산 통과
+    # zed_f9p_rtk_node가 올바른 NavSatStatus + 공분산을 설정하므로 override 불필요
+    gnss_quality_filter = Node(
+        package='jupiter_nav_VO',
+        executable='gnss_quality_filter',
+        name='gnss_quality_filter',
+        output='screen',
+        parameters=[{
+            'input_topic': '/fix',
+            'output_topic': '/fix_filtered',
+            'max_covariance': 50.0,           # cov > 50 m² → 게이트아웃
+        }],
+        condition=IfCondition(LaunchConfiguration('use_gnss'))
+    )
+    
+    # NavSat Transform: WGS84 위경도 → odom 프레임 좌표 변환
+    # /fix_filtered → /odometry/gps (EKF odom3 입력)
+    navsat_config = os.path.join(pkg_jupiter_nav_vo, 'config', 'navsat_params.yaml')
+    
+    navsat_transform = Node(
+        package='robot_localization',
+        executable='navsat_transform_node',
+        name='navsat_transform',
+        output='screen',
+        parameters=[navsat_config],
+        remappings=[
+            ('imu/data', '/imu/data_calibrated'),
+            ('gps/fix', '/fix_filtered'),
+            ('odometry/filtered', '/odom'),
+        ],
+        condition=IfCondition(LaunchConfiguration('use_gnss'))
+    )
+    
+    # navsat_transform은 EKF 출력(/odom)이 필요 → EKF 이후 시작
+    delayed_navsat = TimerAction(
+        period=4.0,
+        actions=[navsat_transform],
+    )
+
+    # ============================================================
+    # 12. SLAM Toolbox (맵 생성 + map→odom TF)
     # ============================================================
     # SLAM Toolbox가 /scan + odom→base_footprint TF를 사용하여:
     #   - /map 토픽 발행 (OccupancyGrid)
@@ -377,12 +468,13 @@ def generate_launch_description():
     )
 
     # ============================================================
-    # 12. Robot Localization (EKF 센서 융합)
+    # 13. Robot Localization (EKF 센서 융합)
     # ============================================================
     # 입력:
     #   odom0: /odom_adapted       (Wheel Odom + 동적 공분산)
     #   odom1: /visual_slam/tracking/odometry_adapted (Isaac VSLAM)
     #   odom2: /odom_rf2o_adapted  (RF2O LiDAR Odometry + 최소 공분산)
+    #   odom3: /odometry/gps       (RTK GPS via navsat_transform, 실외 시에만)
     #   imu0:  /imu/data_calibrated (MCU IMU 보정)
     # 출력:
     #   /odometry/filtered (융합된 오도메트리)
@@ -401,7 +493,7 @@ def generate_launch_description():
     )
     
     # ============================================================
-    # 12. Foxglove Bridge (선택적 시각화)
+    # 14. Foxglove Bridge (선택적 시각화)
     # ============================================================
     foxglove_bridge = Node(
         package='foxglove_bridge',
@@ -447,6 +539,11 @@ def generate_launch_description():
                 '/global_costmap/costmap',
                 '/plan',              # 글로벌 경로
                 '/local_plan',        # 로컬 경로
+                # GNSS/RTK 관련
+                '/fix',               # GPS raw (ZED-F9P)
+                '/fix_filtered',      # GPS filtered (gnss_quality_filter)
+                '/odometry/gps',      # GPS→odom 변환 (navsat_transform)
+                '/gps/filtered',      # WGS84 디버깅 (navsat_transform)
             ],
             'service_whitelist': ['.*'],
             'param_whitelist': ['.*'],
@@ -486,6 +583,7 @@ def generate_launch_description():
         use_foxglove_arg,
         use_rviz_arg,
         lidar_port_arg,
+        use_gnss_arg,
         
         # 1. Robot Description
         robot_state_publisher,
@@ -510,12 +608,20 @@ def generate_launch_description():
         rf2o_node,
         rf2o_covariance_adapter,
         
-        # 7. Sensor Fusion (delayed)
+        # 7. RTK GPS (conditional — use_gnss)
+        tf_base_to_gps,
+        zed_f9p_node,
+        gnss_quality_filter,
+        
+        # 8. Sensor Fusion (delayed)
         delayed_ekf,
         
-        # 8. SLAM Toolbox (delayed)
+        # 9. NavSat Transform (delayed — after EKF)
+        delayed_navsat,
+        
+        # 10. SLAM Toolbox (delayed)
         delayed_slam_toolbox,
         
-        # 9. Visualization
+        # 11. Visualization
         foxglove_bridge,
     ])

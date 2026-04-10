@@ -17,7 +17,12 @@ class Rosmaster(object):
         # com="/dev/ttyUSB0"
         # com="/dev/ttyAMA0"
 
-        self.ser = serial.Serial(com, 115200)
+        self.__com = com
+        self.__baudrate = 115200
+        self.ser = serial.Serial(com, self.__baudrate)
+        self.__serial_ok = True
+        self.__reconnect_lock = threading.Lock()
+        self.__last_reconnect_time = 0
 
         self.__delay_time = delay
         self.__debug = debug
@@ -261,7 +266,34 @@ class Rosmaster(object):
                 self.__read_car_type = car_type
             
 
-    # 接收数据 receive data
+    # USB 시리얼 재연결 시도
+    def __try_reconnect(self):
+        """USB disconnect 후 자동 재연결 시도. 성공 시 True, 실패 시 False."""
+        now = time.time()
+        if now - self.__last_reconnect_time < 2.0:
+            return False
+        with self.__reconnect_lock:
+            self.__last_reconnect_time = now
+            self.__serial_ok = False
+            try:
+                try:
+                    self.ser.close()
+                except Exception:
+                    pass
+                time.sleep(0.5)
+                self.ser = serial.Serial(self.__com, self.__baudrate)
+                self.__serial_ok = True
+                time.sleep(0.2)
+                self.set_auto_report_state(True, forever=False)
+                time.sleep(0.1)
+                self.set_auto_report_state(True, forever=False)
+                print(f"[Rosmaster] Serial reconnected: {self.__com}")
+                return True
+            except Exception as e:
+                print(f"[Rosmaster] Reconnect failed ({self.__com}): {e}")
+                return False
+
+    # 접收数据 receive data
     def __receive_data(self):
         while True:
             try:
@@ -291,6 +323,12 @@ class Rosmaster(object):
                         else:
                             if self.__debug:
                                 print("check sum error:", ext_len, ext_type, ext_data)
+            except (serial.SerialException, OSError) as e:
+                print(f"[Rosmaster] Serial RX error (attempting reconnect): {e}")
+                self.__serial_ok = False
+                if self.__try_reconnect():
+                    continue
+                time.sleep(2.0)
             except Exception as e:
                 print("Serial receive error:", e)
                 time.sleep(0.1)
@@ -341,6 +379,10 @@ class Rosmaster(object):
         elif s_id == 6:
             s_angle = int((180 - 0) * (s_value - 900) / (3100 - 900) + 0 + 0.5)
         return s_angle
+
+    def is_serial_ok(self):
+        """시리얼 연결 상태 확인"""
+        return self.__serial_ok
 
     # 限制电机输入的PWM占空比数值，value=127则保持原来的数据，不修改当前电机速度
     # Limit the PWM duty ratio value of motor input, value=127, keep the original data, do not modify the current motor speed  
@@ -607,9 +649,12 @@ class Rosmaster(object):
             if self.__debug:
                 print("motion:", cmd)
             time.sleep(self.__delay_time)
-        except:
-            print('---set_car_motion error!---')
-            pass
+        except (serial.SerialException, OSError) as e:
+            print(f'[Rosmaster] set_car_motion serial error: {e}')
+            self.__serial_ok = False
+            self.__try_reconnect()
+        except Exception as e:
+            print(f'---set_car_motion error: {e}---')
 
 
     # PID 参数控制，会影响set_car_motion函数控制小车的运动速度变化情况。默认情况下可不调整。

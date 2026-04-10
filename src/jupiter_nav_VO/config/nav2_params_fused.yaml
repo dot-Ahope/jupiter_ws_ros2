@@ -269,27 +269,17 @@ global_costmap:
       resolution: 0.05
       track_unknown_space: true
       # SLAM Toolbox의 맵을 사용 — static_layer가 /map 토픽을 구독
-      plugins: ["static_layer", "obstacle_layer", "nvblox_layer", "inflation_layer"]
+      # ⭐ [2026-04-07] obstacle_layer 제거:
+      #   - SLAM Toolbox가 /map을 통해 이미 장애물 정보 제공 (static_layer)
+      #   - 실시간 장애물 회피는 local_costmap의 obstacle_layer가 담당
+      #   - global costmap의 obstacle_layer는 중복이며, 로봇이 맵 경계에 있을 때
+      #     "Sensor origin out of map bounds" 경고와 함께 raytrace 완전 실패
+      #     (LiDAR가 base_link에서 -3cm X 오프셋 → 맵 좌측 경계와 겹침)
+      plugins: ["static_layer", "nvblox_layer", "inflation_layer"]
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: True
         # /map 토픽 (SLAM Toolbox 발행)을 자동 구독
-      obstacle_layer:
-        plugin: "nav2_costmap_2d::ObstacleLayer"
-        enabled: True
-        observation_sources: scan
-        scan:
-          topic: /scan
-          max_obstacle_height: 2.0
-          min_obstacle_height: 0.0
-          clearing: True
-          marking: True
-          data_type: "LaserScan"
-          raytrace_max_range: 8.0
-          raytrace_min_range: 0.1
-          obstacle_max_range: 5.0
-          obstacle_min_range: 0.1
-          inf_is_valid: False
       # nvblox 3D → 2D ESDF costmap layer (Docker nvblox_node에서 발행)
       nvblox_layer:
         plugin: "nvblox::nav2::NvbloxCostmapLayer"

@@ -6,6 +6,7 @@
 #   odom0: /odom_adapted        (Wheel Odometry - 엔코더 기반 속도, 동적 공분산 적용)
 #   odom1: /visual_slam/tracking/odometry_adapted (Isaac VSLAM Visual Odometry)
 #   odom2: /odom_rf2o           (RF2O LiDAR Odometry - 절대 위치)
+#   odom3: /odometry/gps        (RTK GPS - navsat_transform 경유, 실외 시에만)
 #   imu0:  /imu/data_calibrated (MCU IMU - 보정 후)
 #
 # 동적 공분산 전략 (odom_covariance_adapter 노드가 처리):
@@ -32,7 +33,7 @@ ekf_filter_node:
     # ============================================================
     # 기본 EKF 설정
     # ============================================================
-    frequency: 30.0           # 30Hz - Jetson 부하 고려 (50Hz에서 rate miss 발생)
+    frequency: 50.0           # 50Hz - VSLAM(30Hz) + Wheel(50Hz) + IMU(100Hz) 융합
     sensor_timeout: 0.5       # 센서 타임아웃 (초) - VSLAM 복구 시간 고려
     two_d_mode: true          # 2D 평면 로봇 (floor robot)
     publish_tf: true          # odom → base_link TF 발행
@@ -217,7 +218,39 @@ ekf_filter_node:
     # 여기서 EKF에 더 정확한 값을 제공
     # 참고: robot_localization ROS2 Humble은 imuN_angular_velocity_covariance
     # 파라미터를 지원하지 않음. IMU 공분산은 jupiter_driver_compensated.py에서
-    # 직접 설정됨 (gyro_cov=0.001, accel_cov=0.01)
+    # 직접 설정됨 (gyro_cov=0.005, accel_cov=0.01)
+
+    # ============================================================
+    # odom3: RTK GPS (navsat_transform → /odometry/gps)
+    # ============================================================
+    # 데이터 흐름:
+    #   ZED-F9P (RTK GPS) → /fix (NavSatFix, WGS84 위경도)
+    #   → gnss_quality_filter → /fix_filtered (품질 필터링)
+    #   → navsat_transform_node → /odometry/gps (odom 프레임 좌표)
+    #
+    # gnss_quality_filter가 실내/실외를 판별:
+    #   - 실내 (NO_FIX/POOR): /fix_filtered 미발행 → navsat_transform 입력 없음
+    #     → /odometry/gps 미발행 → EKF가 자동으로 GPS 없이 동작
+    #   - 실외 (GPS/RTK): /fix_filtered 발행 → EKF에 GPS 위치 융합
+    #
+    # 품질별 공분산:
+    #   RTK Fixed: 0.02 m² (cm급 정밀도)
+    #   RTK Float: 0.2 m² (dm급)
+    #   GPS:       10.0 m² (m급, 약한 기여)
+    #
+    # 사용 데이터: 절대 위치(x, y)만 — GPS는 heading 정보 없음
+    # ============================================================
+    odom3: /odometry/gps
+    odom3_config: [true,  true,  false,    # x, y, z ← GPS 절대 위치
+                   false, false, false,    # roll, pitch, yaw
+                   false, false, false,    # vx, vy, vz
+                   false, false, false,    # vroll, vpitch, vyaw
+                   false, false, false]    # ax, ay, az
+
+    odom3_differential: false   # GPS는 절대 위치 (navsat_transform이 odom 프레임으로 변환)
+    odom3_relative: false
+    odom3_queue_size: 5
+    odom3_pose_rejection_threshold: 10.0   # GPS 아웃라이어 거부 (Mahalanobis distance)
 
     # ============================================================
     # Process Noise Covariance (15x15 대각행렬)

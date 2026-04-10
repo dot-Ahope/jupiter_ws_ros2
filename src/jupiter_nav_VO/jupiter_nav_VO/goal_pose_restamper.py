@@ -90,7 +90,10 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        try:
+            rclpy.shutdown()
+        except Exception:
+            pass  # 시그널 핸들러에서 이미 shutdown된 경우 무시
 
 
 if __name__ == '__main__':
