@@ -21,11 +21,13 @@ from . import arm_jupiter
 from .arm_jupiter import Jupiter_ARM
 
 class JupiterDriver(Node):
+    # [2026-04-17] 모터 교체로 캘리브레이션 무효화 → 주석처리. 재캘리브레이션 필요.
     # Angular velocity scale factor (recalibrated 2026-03-19 for 방안A-4 ESC deadzone skip)
     # MCU has internal gain causing over-rotation, compensate in both directions
     # 방안A-4 후 ESC 매핑 변경 → MCU 게인 2.83→2.49 (Part2: 0.5rad/s×3s=85.9° 예상, 75.59° 실측)
     # 보정: 0.353 × (85.9/75.59) = 0.401
-    ANGULAR_SCALE_FACTOR = 0.401  # 방안A-4 기준 재캘리브레이션
+    # ANGULAR_SCALE_FACTOR = 0.401  # 방안A-4 기준 재캘리브레이션
+    ANGULAR_SCALE_FACTOR = 1.0  # 모터 교체 → 보정 없이 1:1 전달
 
     # 방안C: MCU 엔코더 분해능 한계 보정 (정지 회전 시 최소 각속도)
     # 엔코더: 1320 pulse/rev, 10ms 측정주기 → 1 tick = 16.3 mm/s
@@ -33,7 +35,8 @@ class JupiterDriver(Node):
     # MCU_MIN_ANGULAR = 0.12 → 19.7 mm/s → 1.21 ticks/period
     # 주의: min_speed_theta(0.30) × SCALE(0.401) = 0.120 ≥ 0.12 → DWB 명령에 클램프 미적용
     # (0.15일 때 0.120 < 0.15 → 클램프 0.15 → 실효 0.374 = 24% 증폭 → 오버슈트→헌팅)
-    MCU_MIN_ANGULAR = 0.12
+    # MCU_MIN_ANGULAR = 0.12
+    MCU_MIN_ANGULAR = 0.0  # 모터 교체 → 클램프 비활성화
     
     def __init__(self):
         super().__init__('jupiter_driver_compensated')
@@ -258,18 +261,14 @@ class JupiterDriver(Node):
             vy = msg.linear.y       # m/s - lateral velocity (ignored for differential drive)
             angular = msg.angular.z # rad/s - rotational velocity (CCW positive)
             
-            # Apply angular velocity scaling correction
-            # MCU's set_car_motion() has internal gain that causes ~2.83x over-rotation
-            # Scale down to match commanded rad/s to actual rad/s
+            # [2026-04-17] 모터 교체 → SCALE=1.0, MIN_ANGULAR=0.0 으로 캘리브레이션 무효화됨
+            # 재캘리브레이션 후 ANGULAR_SCALE_FACTOR, MCU_MIN_ANGULAR 값 업데이트 필요
             angular_corrected = angular * self.ANGULAR_SCALE_FACTOR
             
             # ESC 데드존은 펌웨어 방안A-4 (ESC deadzone skip)가 처리
             # PID 출력≠0이면 즉시 ESC 111/105로 점프 → 적분 지연 없음
             
-            # 방안C: MCU 엔코더 분해능 한계 보정 (정지 회전 전용)
-            # 정지(vx≈0): 양 바퀴 0 ticks → 작은 angular는 0↔1 tick 진동 → 순회전 0
-            # 전진(vx>0): 양 바퀴 이미 다수 ticks → 작은 차이도 PID 추적 가능 → 클램프 불필요
-            # 전진 중 클램프하면 DWB 헤딩보정이 2~3배 증폭되어 오버슈트→헌팅 발생!
+            # 방안C: MCU 엔코더 분해능 한계 보정 (정지 회전 전용) - 모터 교체로 비활성화
             if abs(vx) < 0.02:  # 정지 상태에서만 클램프
                 if abs(angular_corrected) > 0.001 and abs(angular_corrected) < self.MCU_MIN_ANGULAR:
                     angular_corrected = math.copysign(self.MCU_MIN_ANGULAR, angular_corrected)
@@ -472,10 +471,8 @@ class JupiterDriver(Node):
             vy = self.bot._Rosmaster__vy  # Lateral velocity (m/s)
             vz = self.bot._Rosmaster__vz  # Angular velocity (rad/s) - MCU scaled
             
-            # MCU encoder reports inverted linear velocity direction:
-            #   cmd_vel linear.x = +0.2 (forward) → MCU encoder vx = -0.2
-            #   cmd_vel linear.x = -0.2 (backward) → MCU encoder vx = +0.2
-            # Negate vx to match ROS convention (positive = forward)
+            # [2026-04-17] CAR_MECANUM Motion_Get_Speed(): speed_mm = -1 * offset
+            # → MCU Vx가 전진 시 음수. ROS 좌표(전진=+x)와 반대이므로 부호 반전 필요.
             vx = -vx
             
             # Apply inverse scaling to angular velocity for Nav2 feedback
