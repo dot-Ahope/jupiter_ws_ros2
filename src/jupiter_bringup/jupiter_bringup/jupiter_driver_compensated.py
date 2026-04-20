@@ -36,7 +36,8 @@ class JupiterDriver(Node):
     # 주의: min_speed_theta(0.30) × SCALE(0.401) = 0.120 ≥ 0.12 → DWB 명령에 클램프 미적용
     # (0.15일 때 0.120 < 0.15 → 클램프 0.15 → 실효 0.374 = 24% 증폭 → 오버슈트→헌팅)
     # MCU_MIN_ANGULAR = 0.12
-    MCU_MIN_ANGULAR = 0.0  # 모터 교체 → 클램프 비활성화
+    # MCU_MIN_ANGULAR = 0.0  # [2026-04-17] 모터 교체 → 클램프 비활성화
+    MCU_MIN_ANGULAR = 0.0  # [2026-04-20] 정지 상태 최소 회전 angular 실측값. 주행 중에는 미적용 (line 271 조건)
     
     def __init__(self):
         super().__init__('jupiter_driver_compensated')

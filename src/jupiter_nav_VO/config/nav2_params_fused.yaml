@@ -119,11 +119,11 @@ controller_server:
       debug_trajectory_details: True
       min_vel_x: 0.0
       min_vel_y: 0.0
-      max_vel_x: 0.35              # 보수적 선속도 (실내 안전)
+      max_vel_x: 0.20              # ⭐ 0.35→0.20 [2026-04-20] 후진 쏠림 방지. 저속에서 밸런스 보정 충분
       max_vel_y: 0.0               # 차동구동 — Y 속도 없음
       max_vel_theta: 1.0           # 각속도 최대값 (방안A 펌웨어 적용으로 1.0 복원)
       min_speed_xy: 0.0
-      max_speed_xy: 0.35
+      max_speed_xy: 0.20
       min_speed_theta: 0.15        # ⭐ 0.30→0.15 [2026-03-20] 방안A-4 ESC 스킵 후 0.15도 토크 발생. 0.30은 DWB 데드존(8.6°~14.3°) 생성→헌팅 원인
       acc_lim_x: 0.5
       acc_lim_y: 0.0
@@ -237,11 +237,12 @@ local_costmap:
           inf_is_valid: False
       # nvblox 3D → 2D ESDF costmap layer (Docker nvblox_node에서 발행)
       # nvblox_node 미실행 시 토픽 미수신 → 영향 없음 (graceful degradation)
+      # ⭐ [2026-04-20] static_map_slice → combined_map_slice: 사람 감지+정적 장애물 합산 (people_segmentation 모드)
       nvblox_layer:
         plugin: "nvblox::nav2::NvbloxCostmapLayer"
         enabled: True
         nav2_costmap_global_frame: "odom"   # local_costmap global_frame과 일치
-        nvblox_map_slice_topic: "/nvblox_node/static_map_slice"
+        nvblox_map_slice_topic: "/nvblox_node/combined_map_slice"
         convert_to_binary_costmap: True     # NVIDIA 권장: inflation은 별도 layer 사용
         max_obstacle_distance: 1.0
         inflation_distance: 0.5
@@ -281,11 +282,12 @@ global_costmap:
         map_subscribe_transient_local: True
         # /map 토픽 (SLAM Toolbox 발행)을 자동 구독
       # nvblox 3D → 2D ESDF costmap layer (Docker nvblox_node에서 발행)
+      # ⭐ [2026-04-20] static_map_slice → combined_map_slice: 사람 감지+정적 장애물 합산
       nvblox_layer:
         plugin: "nvblox::nav2::NvbloxCostmapLayer"
         enabled: True
         nav2_costmap_global_frame: "map"    # global_costmap global_frame과 일치
-        nvblox_map_slice_topic: "/nvblox_node/static_map_slice"
+        nvblox_map_slice_topic: "/nvblox_node/combined_map_slice"
         convert_to_binary_costmap: True
         max_obstacle_distance: 1.0
         inflation_distance: 0.5
@@ -306,8 +308,8 @@ velocity_smoother:
     smoothing_frequency: 20.0
     scale_velocities: false
     feedback: "OPEN_LOOP"
-    max_velocity: [0.35, 0.0, 1.0]       # 로봇 최대 속도 (max_vel_x, 0, max_vel_theta)
-    min_velocity: [-0.35, 0.0, -1.0]
+    max_velocity: [0.20, 0.0, 1.0]       # ⭐ 0.35→0.20 [2026-04-20] DWB max_vel_x와 동기화
+    min_velocity: [-0.20, 0.0, -1.0]
     max_accel: [0.5, 0.0, 2.5]           # ⭐ angular 0.8→2.5: ESC 데드존 구간 빠르게 통과 [2026-03-19]
     max_decel: [-0.5, 0.0, -2.5]         # ⭐ angular -0.8→-2.5: 회전 정지 시 데드존 통과 최소화 [2026-03-19]
     odom_topic: "odom"

@@ -40,7 +40,7 @@ class JoyTeleop(Node):
         self.callback_group = ReentrantCallbackGroup()
 
         # --- 파라미터 선언 ---
-        self.declare_parameter('linear_speed_limit', 0.7) # 기존 : 0.45
+        self.declare_parameter('linear_speed_limit', 0.20) # 기존 : 0.45
         self.declare_parameter('angular_speed_limit', 2.00) # 기존 : 2.00
         self.linear_speed_limit = self.get_parameter('linear_speed_limit').get_parameter_value().double_value
         self.angular_speed_limit = self.get_parameter('angular_speed_limit').get_parameter_value().double_value

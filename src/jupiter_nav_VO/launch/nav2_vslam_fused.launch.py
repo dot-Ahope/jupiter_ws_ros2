@@ -137,6 +137,19 @@ def generate_launch_description():
         name='base_to_camera_tf',
         arguments=['0.205', '0', '0.098', '0', '0', '0', 'base_link', 'camera_link']
     )
+
+    # ============================================================
+    # 2-1. Static TF: camera_link → camera0_link
+    # ============================================================
+    # Docker RealSense 드라이버가 camera0 namespace를 사용하므로
+    # camera0_link 프레임이 메인 TF 트리에 연결되어야 nvblox가 동작함
+    # [2026-04-20] identity transform (같은 물리 카메라)
+    tf_camera_to_camera0 = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='camera_to_camera0_tf',
+        arguments=['--frame-id', 'camera_link', '--child-frame-id', 'camera0_link']
+    )
     
     # ============================================================
     # 3. Jupiter Driver (MCU 시리얼 통신)
@@ -591,6 +604,7 @@ def generate_launch_description():
         
         # 2. Static TF
         tf_base_to_camera,
+        tf_camera_to_camera0,
         
         # 3. Hardware Interface
         jupiter_driver,
