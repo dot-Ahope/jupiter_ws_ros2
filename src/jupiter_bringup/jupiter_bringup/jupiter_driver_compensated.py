@@ -38,6 +38,23 @@ class JupiterDriver(Node):
     # MCU_MIN_ANGULAR = 0.12
     # MCU_MIN_ANGULAR = 0.0  # [2026-04-17] 모터 교체 → 클램프 비활성화
     MCU_MIN_ANGULAR = 0.0  # [2026-04-20] 정지 상태 최소 회전 angular 실측값. 주행 중에는 미적용 (line 271 조건)
+
+    # [2026-04-21] 정지 회전 상태기계 (2단계: STARTUP 키크 + RUNNING 패스스루)
+    #
+    # 문제: 채터링 억제를 위해 active 상태에서 max(raw, 0.22)를 강제하면
+    #       RotateToGoal이 near-goal에서 보내는 작은 값(e.g. 0.0526)이 항상
+    #       0.22로 부풀려져 오버슈트 → yaw 미수렴 영구 루프 발생.
+    #
+    # 해결: 시작 키크(0.37, 0.12s) → 이후 nav2 요청값 그대로 통과
+    #   - 채터링 방지: ROT_MIN_REQUEST(0.04) 미만 신호는 시작 자체를 차단
+    #     (velocity_smoother deadband=0.05가 0.04 미만 신호를 이미 0으로 만들므로 안전)
+    #   - 부호 전환 홀드(0.25s): 좌우 교번 억제는 유지
+    MCU_ROT_START_ANGULAR = 0.37     # 정지마찰 극복용 기동 각속도
+    ROT_RUNNING_MIN_ANGULAR = 0.12   # 기동 후 유지 최소값. 0.0526 같은 비현실적 저속 회전 명령 차단
+    ROT_MIN_REQUEST_ANGULAR = 0.04   # 이 이상이어야 회전 시작 (smoother deadband 0.05보다 낮아 안전)
+    ROT_RELEASE_ANGULAR = 0.03       # 이 미만이면 회전 종료 (노이즈 구간)
+    ROT_STARTUP_KICK_SEC = 0.12      # 기동 키크 지속 시간
+    ROT_SIGN_HOLD_SEC = 0.25         # 부호 전환 금지 시간
     
     def __init__(self):
         super().__init__('jupiter_driver_compensated')
@@ -201,6 +218,12 @@ class JupiterDriver(Node):
             self.get_logger().error(f"Failed to set initial PID parameters: {str(e)}")
         
         self.get_logger().info('Jupiter Driver Node has been initialized')
+
+        # 정지 회전 상태기계 변수
+        self._rot_active = False
+        self._rot_sign = 0
+        self._rot_sign_hold_until = 0.0
+        self._rot_startup_until = 0.0    # 기동 키크 종료 시각
         
     def parameter_callback(self, params):
         """Handle parameter updates"""
@@ -269,10 +292,50 @@ class JupiterDriver(Node):
             # ESC 데드존은 펌웨어 방안A-4 (ESC deadzone skip)가 처리
             # PID 출력≠0이면 즉시 ESC 111/105로 점프 → 적분 지연 없음
             
-            # 방안C: MCU 엔코더 분해능 한계 보정 (정지 회전 전용) - 모터 교체로 비활성화
-            if abs(vx) < 0.02:  # 정지 상태에서만 클램프
-                if abs(angular_corrected) > 0.001 and abs(angular_corrected) < self.MCU_MIN_ANGULAR:
-                    angular_corrected = math.copysign(self.MCU_MIN_ANGULAR, angular_corrected)
+            # 정지 회전 상태기계 (2단계: STARTUP 키크 → RUNNING 패스스루)
+            if abs(vx) < 0.02:
+                now = time.monotonic()
+                raw_abs = abs(angular_corrected)
+                req_sign = 0
+                if angular_corrected > 0.0:
+                    req_sign = 1
+                elif angular_corrected < 0.0:
+                    req_sign = -1
+
+                if self._rot_active:
+                    if raw_abs < self.ROT_RELEASE_ANGULAR or req_sign == 0:
+                        # 신호가 노이즈 수준으로 떨어졌으면 회전 종료
+                        self._rot_active = False
+                        self._rot_sign = 0
+                        angular_corrected = 0.0
+                    else:
+                        # 부호 전환 방지 (채터링 억제)
+                        if req_sign != self._rot_sign and now < self._rot_sign_hold_until:
+                            req_sign = self._rot_sign  # hold 기간 중이면 이전 방향 유지
+                        elif req_sign != self._rot_sign:
+                            # hold 만료 후 방향 전환 허용 → 새 기동 키크 시작
+                            self._rot_sign = req_sign
+                            self._rot_sign_hold_until = now + self.ROT_SIGN_HOLD_SEC
+                            self._rot_startup_until = now + self.ROT_STARTUP_KICK_SEC
+
+                        if now < self._rot_startup_until:
+                            # STARTUP 단계: 정지마찰 극복용 키크
+                            angular_corrected = self._rot_sign * self.MCU_ROT_START_ANGULAR
+                        else:
+                            # RUNNING 단계:
+                            # 정지 회전에서는 0.0526 같은 DWB 최소 샘플이 실제 하드웨어를 못 움직일 수 있다.
+                            # 따라서 완전 패스스루 대신, 기동 후 유지 가능한 하한(0.12)만 보장한다.
+                            angular_corrected = req_sign * max(raw_abs, self.ROT_RUNNING_MIN_ANGULAR)
+                else:
+                    if raw_abs >= self.ROT_MIN_REQUEST_ANGULAR and req_sign != 0:
+                        # 유의미한 회전 요청 → 기동 키크와 함께 시작
+                        self._rot_active = True
+                        self._rot_sign = req_sign
+                        self._rot_sign_hold_until = now + self.ROT_SIGN_HOLD_SEC
+                        self._rot_startup_until = now + self.ROT_STARTUP_KICK_SEC
+                        angular_corrected = self._rot_sign * self.MCU_ROT_START_ANGULAR
+                    else:
+                        angular_corrected = 0.0
             
             # Apply minimal deadband to reduce command jitter and motor noise
             # Small values near zero often result from Nav2 controller noise

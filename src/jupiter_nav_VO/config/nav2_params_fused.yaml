@@ -81,7 +81,7 @@ controller_server:
     controller_frequency: 10.0          # Jetson 부하 고려 (20→10Hz)
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
-    min_theta_velocity_threshold: 0.05  # 미세 회전 허용 (이전 0.15)
+    min_theta_velocity_threshold: 0.10  # ⭐ [2026-04-21] 0.05→0.10: 정지 회전 시 실기구가 못 도는 0.0526 영역 차단
     failure_tolerance: 3.0              # ⭐ 0.3→3.0 (inflated zone에서 DWB 일시 실패 허용, 30 cycles @10Hz)
     progress_checker_plugin: "progress_checker"
     goal_checker_plugins: ["general_goal_checker"]
@@ -89,14 +89,14 @@ controller_server:
 
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
-      required_movement_radius: 0.03    # ⭐ 0.1→0.03 (제자리 회전 시 ~3cm drift로 progress 판정 통과)
-      movement_time_allowance: 20.0     # ⭐ 15→20s (inflated corridor 통과 + 최종 회전에 충분한 시간)
+      required_movement_radius: 0.001   # ⭐ [2026-04-21] 5mm→1mm: goal 근접 정렬 중 정지 회전/미세 드리프트를 progress 실패로 오판하지 않도록 완화
+      movement_time_allowance: 120.0    # ⭐ [2026-04-21] 45s→120s: near-goal 장시간 yaw 정렬 중 불필요한 backup 진입 억제
 
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
       xy_goal_tolerance: 0.20          # ⭐ 0.15→0.20 (DWB xy_tol=0.25 보다 좁아야 함, 여유 확보)
-      yaw_goal_tolerance: 0.15          # ⭐ 0.10→0.15 (~8.6°): RotateToGoal min_speed_theta=0.30 + MCU PID 오버슈트(~5°) > 5.7° → 수렴불가. 8.6°로 확대 [2026-03-20]
+      yaw_goal_tolerance: 0.32          # ⭐ [2026-04-21] 0.30→0.32: near-goal 정렬 마무리에서 success 판정 여유를 소폭 확대해 불필요한 progress timeout 억제
 
     # ==============================================================
     # RotationShimController → DWB 래핑
@@ -124,7 +124,7 @@ controller_server:
       max_vel_theta: 1.0           # 각속도 최대값 (방안A 펌웨어 적용으로 1.0 복원)
       min_speed_xy: 0.0
       max_speed_xy: 0.20
-      min_speed_theta: 0.15        # ⭐ 0.30→0.15 [2026-03-20] 방안A-4 ESC 스킵 후 0.15도 토크 발생. 0.30은 DWB 데드존(8.6°~14.3°) 생성→헌팅 원인
+      min_speed_theta: 0.20        # ⭐ [2026-04-21] 0.15→0.20: slowing_factor 출력이 driver ROT_MIN(0.08) 이상이도록 안전 하한 확보
       acc_lim_x: 0.5
       acc_lim_y: 0.0
       acc_lim_theta: 0.8           # 각가속도 (방안A 펌웨어 적용으로 0.8 복원)
@@ -133,7 +133,7 @@ controller_server:
       decel_lim_theta: -0.8        # 각감속도 (방안A 펌웨어 적용으로 -0.8 복원)
       vx_samples: 20
       vy_samples: 1                # 차동구동이므로 Y 샘플 최소화
-      vtheta_samples: 20
+      vtheta_samples: 11               # ⭐ [2026-04-21] 20→11: 1/19=0.0526 병적 최소 샘플 제거, 최소 스텝≈0.10
       sim_time: 1.5
       linear_granularity: 0.05
       angular_granularity: 0.025
@@ -151,7 +151,7 @@ controller_server:
       PathDist.scale: 32.0
       GoalDist.scale: 24.0
       RotateToGoal.scale: 32.0
-      RotateToGoal.slowing_factor: 5.0   # ⭐ 2.0→5.0: 오버슈트 억제 — 목표 헤딩 근접 시 빠른 감속 [2026-03-19]
+      RotateToGoal.slowing_factor: 2.0   # ⭐ [2026-04-21] 2.5→2.0: final yaw 정렬 출력 하한 확보(0.32/2.0=0.16)로 정지 회전 구간 정체 감소
       RotateToGoal.lookahead_time: -1.0
       Twirling.scale: 5.0                # 경로 추종 중 불필요한 스핀 방지 (방안A 적용으로 5.0 복원)
       Oscillation.oscillation_reset_dist: 0.15
