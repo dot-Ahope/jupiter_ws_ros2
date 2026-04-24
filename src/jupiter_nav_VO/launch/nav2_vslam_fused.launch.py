@@ -459,14 +459,40 @@ def generate_launch_description():
     )
 
     # ============================================================
+    # 11-B. Scan Merger (2026-04-24: Depth + LiDAR 통합)
+    # ============================================================
+    # RPLidar /scan (laser frame, 0.2m 높이) + D455 /scan_from_depth (base_link,
+    # 0.02~0.08m 높이 z-slice) 를 base_link 기준으로 병합하여 /scan_merged 로 발행.
+    # → SLAM Toolbox 가 이 병합 스캔을 사용해 저층 창틀/문턱(2~3cm) 도 지도에 반영.
+    # → Nav2 local_costmap.obstacle_layer 도 /scan_merged 를 사용하여 저층 장애물 회피.
+    scan_merger_node = Node(
+        package='jupiter_nav_VO',
+        executable='scan_merger',
+        name='scan_merger',
+        output='screen',
+        parameters=[{
+            'target_frame': 'base_link',
+            'merged_range_max': 5.0,
+            'publish_rate_hz': 10.0,
+        }],
+    )
+
+    # scan_merger 는 EKF 이후 TF 가 준비된 뒤 시작 (depth scan 의 /scan_from_depth 는
+    # Docker 측 jupiter_nvblox.launch.py 가 별도 구동하므로 호스트 launch 와 독립).
+    delayed_scan_merger = TimerAction(
+        period=4.0,
+        actions=[scan_merger_node],
+    )
+
+    # ============================================================
     # 12. SLAM Toolbox (맵 생성 + map→odom TF)
     # ============================================================
-    # SLAM Toolbox가 /scan + odom→base_footprint TF를 사용하여:
+    # SLAM Toolbox가 /scan_merged(LiDAR+Depth) + odom→base_footprint TF를 사용하여:
     #   - /map 토픽 발행 (OccupancyGrid)
     #   - map → odom TF 발행
-    # 5초 지연: IMU 캘리브 + EKF 초기화 후 시작
+    # 5초 지연: IMU 캘리브 + EKF 초기화 후 시작 (scan_merger 보다 1초 뒤)
     slam_params_file = os.path.join(pkg_jupiter_nav, 'config', 'slam_params.yaml')
-    
+
     slam_toolbox_node = Node(
         package='slam_toolbox',
         executable='sync_slam_toolbox_node',
@@ -474,7 +500,7 @@ def generate_launch_description():
         parameters=[slam_params_file],
         output='screen'
     )
-    
+
     delayed_slam_toolbox = TimerAction(
         period=5.0,
         actions=[slam_toolbox_node]
@@ -632,7 +658,10 @@ def generate_launch_description():
         
         # 9. NavSat Transform (delayed — after EKF)
         delayed_navsat,
-        
+
+        # 9-B. Scan Merger (delayed — /scan + /scan_from_depth → /scan_merged)
+        delayed_scan_merger,
+
         # 10. SLAM Toolbox (delayed)
         delayed_slam_toolbox,
         

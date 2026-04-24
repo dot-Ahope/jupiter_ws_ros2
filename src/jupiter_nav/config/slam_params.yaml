@@ -12,7 +12,9 @@ slam_toolbox:
     odom_frame: odom
     map_frame: map
     base_frame: base_footprint  # EKF가 odom->base_footprint 발행하므로 일치
-    scan_topic: /scan
+    # 2026-04-24 (Stage 5): /scan → /scan_merged (RPLidar + D455 depth z-slice 병합)
+    # 저층 창틀·문턱(2~3cm) 을 지도에 반영. scan_merger 노드가 base_link 기준으로 통합 발행.
+    scan_topic: /scan_merged
     mode: mapping #localization
 
     # 맵 경로를 명확하게 지정하고 map_start_at_dock을 false로 설정
@@ -25,7 +27,7 @@ slam_toolbox:
     transform_publish_period: 0.1  # ⭐ TF 발행 주기 (0.05->0.1, 10Hz) - CPU 부하 감소
     map_update_interval: 5.0       # ⭐ 맵 업데이트 주기 (2.0->5.0) - CPU 부하 감소
     resolution: 0.05               # 맵 해상도
-    max_laser_range: 4.0
+    max_laser_range: 5.0           # 2026-04-24: 4.0 → 5.0 (D455 depth 유효 범위 반영)
     minimum_time_interval: 0.5     # ⭐ 업데이트 최소 시간 간격 (0.2->0.5)
     transform_timeout: 0.2         # 타임아웃 감소 (0.5->0.2) - 큐 쌓임 방지, 지연되면 즉시 드롭
     tf_buffer_duration: 30.

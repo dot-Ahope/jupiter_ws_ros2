@@ -1,0 +1,45 @@
+<!--
+  Jupiter 전용 Behavior Tree (2026-04-24)
+  ========================================
+  공식 nav2_bt_navigator 의 navigate_to_pose_w_replanning_and_recovery.xml 기반.
+  수정점: RecoveryActions 의 <BackUp> 노드를 제거하고 <Spin> + <Wait> 로 대체.
+
+  이유: 좁은 통로(1m 문) 에서 DWB 가 유효 trajectory 를 찾지 못하면 backup 이
+       발화하여 뒤로 밀리고, 재계획 후에도 같은 상황 반복. backup 을 제거하면
+       Clearing(costmap 초기화) 및 Spin(제자리 회전으로 시야 재확보) 으로만
+       복구 시도 → 통로 앞에서 정체 대신 재진입 기회.
+
+  Recovery 순환 순서 (RoundRobin):
+    1. ClearingActions  : local/global costmap 초기화 (stale obstacle 제거)
+    2. Spin             : 90° 제자리 회전 (시야 재확보)
+    3. Wait             : 2초 대기 (동적 장애물이 지나가길 대기)
+-->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode number_of_retries="6" name="NavigateRecovery">
+      <PipelineSequence name="NavigateWithReplanning">
+        <RateController hz="1.0">
+          <RecoveryNode number_of_retries="1" name="ComputePathToPose">
+            <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="global_costmap/clear_entirely_global_costmap"/>
+          </RecoveryNode>
+        </RateController>
+        <RecoveryNode number_of_retries="1" name="FollowPath">
+          <FollowPath path="{path}" controller_id="FollowPath"/>
+          <ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_local_costmap"/>
+        </RecoveryNode>
+      </PipelineSequence>
+      <ReactiveFallback name="RecoveryFallback">
+        <GoalUpdated/>
+        <RoundRobin name="RecoveryActions">
+          <Sequence name="ClearingActions">
+            <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
+          </Sequence>
+          <Spin spin_dist="1.57"/>
+          <Wait wait_duration="2"/>
+        </RoundRobin>
+      </ReactiveFallback>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>
