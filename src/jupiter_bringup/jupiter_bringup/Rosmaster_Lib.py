@@ -627,20 +627,25 @@ class Rosmaster(object):
             print('---set_car_run error!---')
             pass
 
-    # 小车运动控制, 
+    # 小车运动控制,
     # Car movement control
-    def set_car_motion(self, v_x, v_y, v_z):
+    def set_car_motion(self, v_x, v_y, v_z, adjust=False):
         '''
-        输入范围 input range: 
+        输入范围 input range:
         X3: v_x=[-1.0, 1.0], v_y=[-1.0, 1.0], v_z=[-5, 5] # 바꿨음 v_x = [-0.45, 0.45], v_y = [-2.0, 2.0]
         X3PLUS: v_x=[-0.7, 0.7], v_y=[-0.7, 0.7], v_z=[-3.2, 3.2]
         R2/R2L: v_x=[-1.8, 1.8], v_y=[-0.045, 0.045], v_z=[-3, 3]
+
+        adjust: True 면 MCU 의 IMU yaw PID 보정 (Differential_Yaw_Calc) 활성.
+                한쪽 바퀴 마찰 차이로 인한 직진 중 yaw drift 를 MCU 가 자동 보정.
+                set_car_run 의 동일 패턴 (CAR_TYPE | __CAR_ADJUST=0x80).
         '''
         try:
+            car_type_byte = (self.__CAR_TYPE | self.__CAR_ADJUST) if adjust else self.__CAR_TYPE
             vx_parms = bytearray(struct.pack('h', int(v_x*1000)))
             vy_parms = bytearray(struct.pack('h', int(v_y*1000)))
             vz_parms = bytearray(struct.pack('h', int(v_z*1000)))
-            cmd = [self.__HEAD, self.__DEVICE_ID, 0x00, self.FUNC_MOTION, self.__CAR_TYPE, \
+            cmd = [self.__HEAD, self.__DEVICE_ID, 0x00, self.FUNC_MOTION, car_type_byte, \
                 vx_parms[0], vx_parms[1], vy_parms[0], vy_parms[1], vz_parms[0], vz_parms[1]]
             cmd[2] = len(cmd) - 1
             checksum = sum(cmd, self.__COMPLEMENT) & 0xff

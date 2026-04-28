@@ -166,11 +166,10 @@ def generate_launch_description():
         name='jupiter_driver',
         output='screen',
         parameters=[driver_params, {
-            # 2026-03-16: Direction D — IMU 자이로 스케일 보정
-            # 180° 회전 테스트에서 IMU 자이로가 ~2.3% 과소측정 확인
-            # → 회전 후 EKF yaw 오차 -3.91° → 직진 시 7cm/m 좌측편향
-            # gyro_scale 1.025로 보정하여 과소측정 보상
-            'imu_gyro_scale': 1.025,
+            # 2026-03-16: Direction D — IMU 자이로 스케일 보정 (1.0 → 1.025)
+            # 2026-04-28: sensor_yaw_align.py 측정 결과 IMU/RF2O = 1.041 (4.1% over-report)
+            #   → 1.025 / 1.041 ≈ 0.984 로 재조정. RF2O (절대 위치 기준) 와 정렬.
+            'imu_gyro_scale': 0.984,
         }],
         remappings=[
             ('/imu', '/jupiter/imu'),

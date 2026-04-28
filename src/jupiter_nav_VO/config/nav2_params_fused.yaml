@@ -85,7 +85,7 @@ controller_server:
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.10  # ⭐ [2026-04-21] 0.05→0.10: 정지 회전 시 실기구가 못 도는 0.0526 영역 차단
-    failure_tolerance: 3.0              # ⭐ 0.3→3.0 (inflated zone에서 DWB 일시 실패 허용, 30 cycles @10Hz)
+    failure_tolerance: 5.0              # 2026-04-28: 3.0→5.0 (사람 통로 횡단 대기 시간 확보, 50 cycles @10Hz)
     progress_checker_plugin: "progress_checker"
     goal_checker_plugins: ["general_goal_checker"]
     controller_plugins: ["FollowPath"]
@@ -112,13 +112,15 @@ controller_server:
     FollowPath:
       plugin: "nav2_rotation_shim_controller::RotationShimController"
       primary_controller: "dwb_core::DWBLocalPlanner"
-      angular_dist_threshold: 0.35        # ⭐ 45°→20°: RotationShim이 160° 회전 담당, DWB는 20°만 보정 [2026-03-19]
-      # 2026-04-24 (Stage 2): 0.3 → 0.6. 부풀어진 벽 inflation 을 RotationShim 이 "앞 장애물"로
-      # 오인해 제자리 회전만 반복하는 현상 방지. 좁은 통로에서 DWB 에 더 일찍 위임.
-      forward_sampling_distance: 0.6
+      angular_dist_threshold: 0.35        # ⭐ 45°→20°: RotationShim이 160° 회전 담당, DWB는 20°만 보otion [2026-03-19]
+      # 2026-04-28 (수정 #3): 0.6 → 0.3 복원
+      # 이유: 04-24 에 0.3→0.6 으로 키웠으나, 짧은 경로(<1.2m)에서 forward sample 지점이
+      #   path 끝 너머로 가서 RotationShim 활성 판단이 부정확 → 정지 회전이 DWB 로 떨어져
+      #   데드존 진입. 03-18 검증값 0.3 으로 복원.
+      forward_sampling_distance: 0.3
       rotate_to_heading_angular_vel: 0.5 # ⭐ 0.8→0.5 [2026-03-20] 방안A-4 ESC deadzone skip 후 0.5도 즉시 토크 발생. 0.8은 PID 적분 모멘텀 과다→핸드오프 오버슈트
       max_angular_accel: 3.0             # ⭐ 5.0→3.0 [2026-03-20] 0.5 목표 시 5.0 불필요. 3.0이면 0→0.5 도달 0.17s. RotateToGoal 급가속 억제
-      simulate_ahead_time: 1.0           # 충돌 검사 시뮬레이션 시간
+      simulate_ahead_time: 1.5           # 2026-04-28: 1.0→1.5 (회전 후 충돌 검사 시간 확대, path 추종 안정)
 
       # DWB 파라미터 (primary_controller)
       debug_trajectory_details: True
@@ -138,8 +140,10 @@ controller_server:
       decel_lim_theta: -0.8        # 각감속도 (방안A 펌웨어 적용으로 -0.8 복원)
       vx_samples: 20
       vy_samples: 1                # 차동구동이므로 Y 샘플 최소화
-      # 2026-04-24 (Stage 2): 11 → 21. 좁은 통로(1m 문)에서 미세 각 조정 분해능 2배.
-      vtheta_samples: 21
+      # 2026-04-28 (수정 #3): 21 → 11 복원. 04-24 에 21 로 키웠으나 04-21 분석:
+      #   "1/19=0.0526 병적 최소 샘플 제거, 최소 스텝≈0.10" — 11 이 데드존 안전.
+      #   21 은 sample 평가 시간 2배 → 10Hz controller cycle 압박 → 정지 회전 timing 불안.
+      vtheta_samples: 11
       # 2026-04-24 (Stage 2): 1.5 → 1.0. 예측 거리 0.3→0.2m. 좁은 통로에서 trajectory 가
       # 부풀어진 lethal 영역에 걸릴 확률 감소 → DWB 가 유효 trajectory 를 더 쉽게 찾음.
       sim_time: 1.0
@@ -154,13 +158,18 @@ controller_server:
       # 2026-04-24 (Stage 2): BaseObstacle 0.02 → 0.05 (장애물 회피 비용 소폭 상향,
       # 여전히 PathDist 대비 작아 경로 추종은 유지하지만 free-but-close trajectory 가 경쟁에서 덜 밀림).
       BaseObstacle.scale: 0.05
-      # 2026-04-24 (Stage 2): PathAlign/PathDist 32 → 20 (global plan 이 문 중앙이 아닐 때
-      # local trajectory 가 회피하도록 plan 구속력 완화).
+      # 2026-04-24 (Stage 2): PathAlign/PathDist 32 → 20 (좁은 통로 회피 위해 plan 구속력 완화)
+      # 2026-04-28 (수정 #2): PathDist 20→28 (한쪽 바퀴 보정 강화)
+      # 2026-04-28 (수정 #3): PathDist 28→24 절충 — 28 이 너무 강해 회전 trajectory 까지
+      #   reject → 정지 회전 어려움 발생. 24 로 회전 자유도 회복하면서 위치 추종 일정 확보.
       PathAlign.scale: 20.0
-      PathAlign.forward_point_distance: 0.1
+      # 2026-04-28 (수정 #4): forward_point_distance 0.1 → 0.2
+      #   path 의 더 앞 지점(0.2m 앞) 의 heading 으로 정렬 → preemptive turn-in,
+      #   MCU yaw 보정 활성화와 함께 path 추종 정확도 향상.
+      PathAlign.forward_point_distance: 0.2
       GoalAlign.scale: 24.0
-      GoalAlign.forward_point_distance: 0.1
-      PathDist.scale: 20.0
+      GoalAlign.forward_point_distance: 0.2
+      PathDist.scale: 24.0
       GoalDist.scale: 24.0
       RotateToGoal.scale: 32.0
       RotateToGoal.slowing_factor: 2.0   # ⭐ [2026-04-21] 2.5→2.0: final yaw 정렬 출력 하한 확보(0.32/2.0=0.16)로 정지 회전 구간 정체 감소
@@ -171,19 +180,37 @@ controller_server:
       Oscillation.scale: 1.0              # 진동 페널티 (방안A 적용으로 1.0 복원)
 
 # ==============================================================
-# Planner Server (NavFn Global Planner)
+# Planner Server (SmacPlanner2D Global Planner)
+# ==============================================================
+# 2026-04-28 (수정 #2): SmacPlannerHybrid → SmacPlanner2D 다운그레이드
+# 이유: Hybrid + DUBIN 은 minimum_turning_radius=0.20m 곡선 plan 을 생성하는데,
+#   2바퀴 차동구동 + 한쪽 바퀴 기구 이상 환경에서:
+#     · 곡선 plan 추종 시 좌우 속도차 명령 → 이상 바퀴 시 이탈 누적
+#     · RotationShim 의 정지 회전 처리가 무력화됨 (plan 자체에 회전 곡선 포함)
+#     · 결과: 방향 못 잡는 증상
+#   SmacPlanner2D 는 motion model 없는 holonomic A* (NavFn 진화형):
+#     · 자유 회전 plan → RotationShim 이 정지 회전 처리 (NavFn 시절 동작 회복)
+#     · footprint collision check 정확 (좁은 통로 통과 능력 NavFn 보다 우월)
+#     · minimum_turning_radius / motion_model 등 차동구동 부적합 파라미터 불필요
+# 백업: backup_2026_04_28/nav2_params_fused.yaml.bak (Hybrid + DUBIN 시절)
 # ==============================================================
 planner_server:
   ros__parameters:
-    expected_planner_frequency: 5.0     # Jetson CPU 부하 고려
+    expected_planner_frequency: 3.0
     use_sim_time: False
-    transform_tolerance: 0.5            # stamp=Time(0,0) + NTP chrony 적용 후 축소 (3.0→0.5)
+    transform_tolerance: 0.5
     planner_plugins: ["GridBased"]
     GridBased:
-      plugin: "nav2_navfn_planner/NavfnPlanner"
-      tolerance: 0.15                   # 목표 근접 경로 (이전 0.5 — 50cm 떨어진 곳에서 경로 종료 가능)
-      use_astar: false
-      allow_unknown: true               # SLAM 맵에서 미탐색 영역 허용
+      plugin: "nav2_smac_planner/SmacPlanner2D"
+      downsample_costmap: false           # costmap 해상도 그대로 (5cm)
+      downsampling_factor: 1
+      tolerance: 0.25                     # 목표 근접
+      allow_unknown: true                 # SLAM 미탐색 영역 허용
+      max_iterations: 1000000             # 충분한 탐색 깊이
+      max_on_approach_iterations: 1000
+      max_planning_time: 5.0              # 최대 5초
+      cost_travel_multiplier: 2.0         # cost 셀 회피 가중치 (NavFn cost_factor 와 유사)
+      use_final_approach_orientation: false  # final yaw 는 RotateToGoal critic 이 처리
 
 # ==============================================================
 # Behavior Server (Recovery Behaviors)
@@ -267,10 +294,11 @@ local_costmap:
         inflation_distance: 0.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        # 2026-04-24: cost_scaling_factor 5.0 → 10.0 (NVIDIA Carter 기본값).
-        # 감쇠 가파라져 좁은 통로(1m 문) 통과 trajectory 의 cost 총합 감소 → DWB 수용 가능.
-        cost_scaling_factor: 10.0
-        inflation_radius: 0.30          # inscribed 0.1225m + 0.1775m 안전여유
+        # 2026-04-28: 10.0 → 5.0 (감쇠 더 완만, SmacPlanner 의 cost_penalty 와 균형)
+        cost_scaling_factor: 5.0
+        # 2026-04-28: 0.30 → 0.20 (좁은 통로 통과 우선, 1m 문 free 폭 0.40→0.60m)
+        # SmacPlanner 가 footprint 충돌 검사를 정확히 하므로 inflation 작아도 안전.
+        inflation_radius: 0.20
 
 # ==============================================================
 # Global Costmap
@@ -314,8 +342,9 @@ global_costmap:
         inflation_distance: 0.0         # 2026-04-24: local 과 동일 (이중 inflation 제거)
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 10.0       # 2026-04-24: 5.0 → 10.0 (local 과 동일)
-        inflation_radius: 0.30          # inscribed 0.1225m + 0.1775m 안전여유
+        # 2026-04-28: local 과 동일하게 완화 (10→5, 0.30→0.20)
+        cost_scaling_factor: 5.0
+        inflation_radius: 0.20
 
 # ==============================================================
 # Velocity Smoother

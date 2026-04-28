@@ -354,7 +354,12 @@ class JupiterDriver(Node):
             # - Measures actual wheel speeds via encoders
             # - Adjusts motor PWM to minimize error
             # - Compensates for friction, load, battery voltage automatically
-            self.bot.set_car_motion(vx, vy, angular_corrected)
+            #
+            # 2026-04-28: adjust=True — MCU 의 IMU yaw PID 보정 (Differential_Yaw_Calc) 활성화.
+            #   한쪽 바퀴 마찰 차이(WHEEL L/R 비대칭 8.6% 측정됨)로 인한 직진 중 yaw drift 를
+            #   MCU 가 IMU 기반 자동 보정. CAR_TYPE 바이트의 0x80 비트 = adjust 플래그
+            #   (set_car_run 이 이미 사용 중인 동일 패턴, MCU protocol.c:536 검증).
+            self.bot.set_car_motion(vx, vy, angular_corrected, adjust=True)
             
             # Optional: Log commands for debugging (disabled by default)
             # if abs(vx) > 0.01 or abs(angular) > 0.01:

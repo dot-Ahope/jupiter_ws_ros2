@@ -1,24 +1,28 @@
 <!--
-  Jupiter 전용 Behavior Tree (2026-04-24)
-  ========================================
+  Jupiter 전용 Behavior Tree (2026-04-28 갱신)
+  ============================================
   공식 nav2_bt_navigator 의 navigate_to_pose_w_replanning_and_recovery.xml 기반.
-  수정점: RecoveryActions 의 <BackUp> 노드를 제거하고 <Spin> + <Wait> 로 대체.
-
-  이유: 좁은 통로(1m 문) 에서 DWB 가 유효 trajectory 를 찾지 못하면 backup 이
-       발화하여 뒤로 밀리고, 재계획 후에도 같은 상황 반복. backup 을 제거하면
-       Clearing(costmap 초기화) 및 Spin(제자리 회전으로 시야 재확보) 으로만
-       복구 시도 → 통로 앞에서 정체 대신 재진입 기회.
+  수정점:
+    1. <BackUp> 노드 제거 (좁은 통로에서 뒤로 밀리는 현상 방지)
+    2. RecoveryActions 에 <Spin spin_dist="0.785"/> (45°) 추가 — 카메라 측면 시야 확보
+       (벽 정면 시 문이 카메라 FOV 밖 → small spin 으로 nvblox dynamic voxel 재수집)
+    3. <Wait wait_duration="5"/> — 사람 횡단 대기 시간 충분히 확보
+    4. number_of_retries 6 → 10 — 사람이 길게 머물러도 인내
+    5. RateController hz 1.0 → 0.5 — global plan 2초마다 재계산 (CPU 절약 + 안정)
 
   Recovery 순환 순서 (RoundRobin):
-    1. ClearingActions  : local/global costmap 초기화 (stale obstacle 제거)
-    2. Spin             : 90° 제자리 회전 (시야 재확보)
-    3. Wait             : 2초 대기 (동적 장애물이 지나가길 대기)
+    1. ClearingActions   : local/global costmap 초기화 (stale obstacle 제거)
+    2. SpinSmall (45°)   : 카메라 측면 시야 확보 — 벽 정면 시 문 인식
+    3. Wait (5s)         : 사람이 통로를 횡단할 때까지 대기
+    4. SpinLarge (90°)   : 더 넓은 시야 재확보 (작은 회전으로 부족한 경우)
+
+  백업: backup_2026_04_28/navigate_to_pose_no_backup.xml.bak (이전 버전)
 -->
 <root main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
-    <RecoveryNode number_of_retries="6" name="NavigateRecovery">
+    <RecoveryNode number_of_retries="10" name="NavigateRecovery">
       <PipelineSequence name="NavigateWithReplanning">
-        <RateController hz="1.0">
+        <RateController hz="0.5">
           <RecoveryNode number_of_retries="1" name="ComputePathToPose">
             <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
             <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="global_costmap/clear_entirely_global_costmap"/>
@@ -36,8 +40,9 @@
             <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
             <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
           </Sequence>
+          <Spin spin_dist="0.785"/>
+          <Wait wait_duration="5"/>
           <Spin spin_dist="1.57"/>
-          <Wait wait_duration="2"/>
         </RoundRobin>
       </ReactiveFallback>
     </RecoveryNode>
