@@ -44,7 +44,10 @@ class JoyTeleop(Node):
         self.get_logger().info(f"Speed limits: linear={self.linear_speed_limit}, angular={self.angular_speed_limit}")
 
         # --- 퍼블리셔 생성 ---
-        self.cmdVelPublisher = self.create_publisher(Twist, '/cmd_vel', 10)
+        # [2026-04-30] /cmd_vel → /cmd_vel_joy: jupiter_safety 의 twist_mux 가
+        # joy / force / nav 우선순위 mux 후 /cmd_vel_safe 로 publish, driver 는 그걸 구독.
+        # 이전엔 nav2 + joy 가 /cmd_vel 동시 publish 충돌. 이제 mux 가 priority 100 으로 joy 우선.
+        self.cmdVelPublisher = self.create_publisher(Twist, '/cmd_vel_joy', 10)
         self.pub_Adjust = self.create_publisher(Adjust, "/Adjust", 10)
 
         # --- 서브스크라이버 생성 ---

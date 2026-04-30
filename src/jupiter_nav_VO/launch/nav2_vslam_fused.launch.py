@@ -71,6 +71,7 @@ def generate_launch_description():
     pkg_jupiter_nav = get_package_share_directory('jupiter_nav')
     pkg_jupiter_description = get_package_share_directory('jupiter_description')
     pkg_jupiter_bringup = get_package_share_directory('jupiter_bringup')
+    pkg_jupiter_safety = get_package_share_directory('jupiter_safety')
     
     # ============================================================
     # Launch Arguments
@@ -173,7 +174,16 @@ def generate_launch_description():
         }],
         remappings=[
             ('/imu', '/jupiter/imu'),
-            ('/vel', '/jupiter/get_vel')
+            ('/vel', '/jupiter/get_vel'),
+            # [2026-04-30 Tier 2] driver 는 nav2 의 /cmd_vel 직접 구독 → twist_mux 통과한
+            # /cmd_vel_safe 로 변경. joy / force / nav 우선순위 mux 후 driver 에 도달.
+            # [2026-04-30 Tier 2.5 v2] collision_monitor 가 twist_mux 이전에 위치 (nav2 stream
+            # 만 gate). forced_recovery 와 joy 는 collision_monitor bypass — recovery 차단되던
+            # deadlock 해결. driver 는 다시 twist_mux 직접 출력 /cmd_vel_safe 구독.
+            # 흐름: nav→collision_monitor→/cmd_vel_nav_filtered─┐
+            #       joy→/cmd_vel_joy─────────────────────────────┼→twist_mux→/cmd_vel_safe→driver
+            #       force→/cmd_vel_force──────────────────────────┘
+            ('/cmd_vel', '/cmd_vel_safe'),
         ]
     )
     
@@ -484,6 +494,23 @@ def generate_launch_description():
     )
 
     # ============================================================
+    # 11-C. Safety Layer (Tier 2 — perception-independent stuck detection + forced recovery)
+    # ============================================================
+    # cmd_vel mux + stuck detection + forced backup
+    # nav2 의 collision-check-based recovery 한계 우회 (유리/벽에 stuck 시 강제 후진).
+    # delayed: scan_merger 시작 후 1초 — /scan_merged + driver 토픽 안정 후 시작.
+    safety_layer = TimerAction(
+        period=5.0,
+        actions=[
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    os.path.join(pkg_jupiter_safety, 'launch', 'safety_layer.launch.py')
+                )
+            )
+        ]
+    )
+
+    # ============================================================
     # 12. SLAM Toolbox (맵 생성 + map→odom TF)
     # ============================================================
     # SLAM Toolbox가 /scan_merged(LiDAR+Depth) + odom→base_footprint TF를 사용하여:
@@ -660,6 +687,10 @@ def generate_launch_description():
 
         # 9-B. Scan Merger (delayed — /scan + /scan_from_depth → /scan_merged)
         delayed_scan_merger,
+
+        # 9-C. Safety Layer (Tier 2: twist_mux + stuck_detector + forced_recovery + alert)
+        # cmd_vel pipeline: nav2/cmd_vel + cmd_vel_joy + cmd_vel_force → twist_mux → /cmd_vel_safe → driver
+        safety_layer,
 
         # 10. SLAM Toolbox (delayed)
         delayed_slam_toolbox,

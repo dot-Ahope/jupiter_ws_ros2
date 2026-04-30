@@ -1,0 +1,34 @@
+# Jupiter cmd_vel 우선순위 다중화
+# ============================================================
+# 토픽 흐름 (Tier 2.5 적용 후):
+#
+#   nav2 → /cmd_vel → collision_monitor → /cmd_vel_nav_filtered ┐
+#   joy → /cmd_vel_joy (bypass collision_monitor) ──────────────┼→ twist_mux → /cmd_vel_safe → driver
+#   forced_recovery → /cmd_vel_force (bypass collision_monitor) ┘
+#
+# 우선순위 (높음 → 낮음):
+#   100  joy        — 운영자 직접 조작 (최우선, collision_monitor bypass)
+#    80  force      — Tier 2 safety: stuck 시 강제 후진 (자체 rear safety check)
+#    50  nav        — nav2 자동 주행 (collision_monitor 통과 후)
+#
+# 이전 (deadlock 발생): twist_mux out → collision_monitor → driver. forced_recovery 의 후진도
+# polygon trip 시 차단되어 stuck 에서 못 빠져나옴.
+# 현재: collision_monitor 가 nav2 stream 만 gate. forced_recovery 와 joy 는 직접 통과.
+
+twist_mux:
+  ros__parameters:
+    topics:
+      joy:
+        topic: /cmd_vel_joy
+        timeout: 0.5
+        priority: 100
+      force:
+        topic: /cmd_vel_force
+        timeout: 0.5
+        priority: 80
+      nav:
+        topic: /cmd_vel_nav_filtered    # collision_monitor 통과 후의 nav2 cmd
+        timeout: 0.5
+        priority: 50
+
+    # locks: 미사용 (필요 시 emergency_stop 토픽 추가 가능)

@@ -1,0 +1,41 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>jupiter_safety</name>
+  <version>0.1.0</version>
+  <description>
+    Tier 2 safety layer for Jupiter rover.
+
+    Provides perception-independent stuck detection and forced recovery, bypassing
+    nav2's collision-check-based recovery limitations.
+
+    Components:
+      - stuck_detector: monitors cmd_vel vs MCU encoder feedback (motor stall) and
+        IMU acceleration spikes (collision). Publishes /stuck_status.
+      - forced_recovery: on stuck, directly publishes backward cmd_vel to /cmd_vel_force
+        with rear-LiDAR safety check. Bypasses nav2 collision checks.
+      - alert_publisher: drives OLED / buzzer alert when stuck.
+      - twist_mux config: prioritized cmd_vel multiplexing
+        (joy &gt; force &gt; nav).
+  </description>
+
+  <maintainer email="jetson@todo.todo">jetson</maintainer>
+  <license>MIT</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>twist_mux</exec_depend>
+  <exec_depend>nav2_collision_monitor</exec_depend>
+  <exec_depend>nav2_lifecycle_manager</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

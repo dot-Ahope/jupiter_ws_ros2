@@ -1,9 +1,12 @@
 <!--
-  Jupiter 전용 Behavior Tree (2026-04-28 갱신)
+  Jupiter 전용 Behavior Tree (2026-04-29 갱신)
   ============================================
   공식 nav2_bt_navigator 의 navigate_to_pose_w_replanning_and_recovery.xml 기반.
   수정점:
-    1. <BackUp> 노드 제거 (좁은 통로에서 뒤로 밀리는 현상 방지)
+    1. (2026-04-28) <BackUp> 노드 제거 → (2026-04-29) 짧은 BackUp 재도입.
+       이유: 제거 후 좁은 공간에서 stuck 시 어떤 recovery 도 로버를 빼낼 수 없었음.
+       0.10m × 0.10 m/s — 한쪽 바퀴 정지 마찰 (저속에선 한 바퀴만 도는 현상) 회피하면서
+       짧은 거리만 이동하도록 속도 0.10 m/s 로 설정.
     2. RecoveryActions 에 <Spin spin_dist="0.785"/> (45°) 추가 — 카메라 측면 시야 확보
        (벽 정면 시 문이 카메라 FOV 밖 → small spin 으로 nvblox dynamic voxel 재수집)
     3. <Wait wait_duration="5"/> — 사람 횡단 대기 시간 충분히 확보
@@ -13,10 +16,13 @@
   Recovery 순환 순서 (RoundRobin):
     1. ClearingActions   : local/global costmap 초기화 (stale obstacle 제거)
     2. SpinSmall (45°)   : 카메라 측면 시야 확보 — 벽 정면 시 문 인식
-    3. Wait (5s)         : 사람이 통로를 횡단할 때까지 대기
-    4. SpinLarge (90°)   : 더 넓은 시야 재확보 (작은 회전으로 부족한 경우)
+    3. BackUp (10cm)     : 좁은 곳 stuck 탈출 — 0.10m × 0.10 m/s
+    4. Wait (5s)         : 사람이 통로를 횡단할 때까지 대기
+    5. SpinLarge (90°)   : 더 넓은 시야 재확보 (작은 회전으로 부족한 경우)
 
-  백업: backup_2026_04_28/navigate_to_pose_no_backup.xml.bak (이전 버전)
+  백업:
+    backup_2026_04_28/navigate_to_pose_no_backup.xml.bak (BackUp 제거 시절)
+    backup_2026_04_29/navigate_to_pose_no_backup.xml.bak (BackUp 재도입 직전)
 -->
 <root main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
@@ -41,6 +47,7 @@
             <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
           </Sequence>
           <Spin spin_dist="0.785"/>
+          <BackUp backup_dist="0.10" backup_speed="0.10"/>
           <Wait wait_duration="5"/>
           <Spin spin_dist="1.57"/>
         </RoundRobin>

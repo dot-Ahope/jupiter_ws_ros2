@@ -1,0 +1,59 @@
+# Jupiter — nav2_collision_monitor 설정
+# ============================================================
+# Tier 2.5: nav2 의 자동 주행 stream 만 gate (forced_recovery + joy 는 bypass).
+#
+# 파이프라인:
+#   nav2 → /cmd_vel → [collision_monitor] → /cmd_vel_nav_filtered ─┐
+#   joy → /cmd_vel_joy (bypass) ───────────────────────────────────┼→ twist_mux → /cmd_vel_safe → driver
+#   forced_recovery → /cmd_vel_force (bypass) ─────────────────────┘
+#
+# 이유:
+#   - 이전: twist_mux 이후 배치 → forced_recovery 후진 명령도 polygon trip 시 차단 → deadlock
+#   - 현재: nav2 만 통과 → 자동 주행만 충돌 직전 stop, recovery 와 운영자 joy 는 우선 통과
+#   - forced_recovery 는 자체 rear LiDAR 안전 검사 (forced_recovery.py:_is_rear_safe) 가짐
+#
+# 폴리곤 (로버 기준 base_link, 시계방향):
+#   PolygonStop  : 전방 0.30m × 0.36m 폭 + 약간 후방 → emergency stop
+#   PolygonSlow  : 전방 0.55m × 0.50m 폭 → 감속 (40%)
+#
+# Footprint: 0.36m × 0.245m. 외접원 0.218m. polygon 은 footprint + 안전 buffer.
+
+collision_monitor:
+  ros__parameters:
+    base_frame_id: "base_link"
+    odom_frame_id: "odom"
+    cmd_vel_in_topic: "/cmd_vel"                # nav2 의 직접 출력
+    cmd_vel_out_topic: "/cmd_vel_nav_filtered"  # twist_mux 의 nav 입력으로
+    state_topic: "/collision_monitor_state"
+    transform_tolerance: 0.5
+    source_timeout: 0.5
+    base_shift_correction: True
+    stop_pub_timeout: 2.0
+
+    polygons: ["PolygonStop", "PolygonSlow"]
+
+    PolygonStop:
+      type: "polygon"
+      # 전방 0.30m, 후방 -0.18m, 폭 ±0.18m
+      points: [0.30, 0.18, 0.30, -0.18, -0.18, -0.18, -0.18, 0.18]
+      action_type: "stop"
+      min_points: 3
+      visualize: True
+      polygon_pub_topic: "polygon_stop"
+
+    PolygonSlow:
+      type: "polygon"
+      # 전방 0.55m, 폭 ±0.25m
+      points: [0.55, 0.25, 0.55, -0.25, -0.25, -0.25, -0.25, 0.25]
+      action_type: "slowdown"
+      min_points: 3
+      slowdown_ratio: 0.4
+      visualize: True
+      polygon_pub_topic: "polygon_slow"
+
+    observation_sources: ["scan"]
+
+    scan:
+      type: "scan"
+      topic: "/scan_merged"
+      # /scan_merged 는 RPLidar 360° + D455 forward depth z-slice 병합

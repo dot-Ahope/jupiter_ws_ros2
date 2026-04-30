@@ -56,15 +56,20 @@ class JupiterDriver(Node):
     ROT_STARTUP_KICK_SEC = 0.12      # 기동 키크 지속 시간
     ROT_SIGN_HOLD_SEC = 0.25         # 부호 전환 금지 시간
 
-    # [2026-04-30] 이동 + 회전 데드존 보상
-    # DWB 가 ω≈0.16 같은 작은 angular 을 내면 wheel-level 명령(left=0.10, right=0.06 m/s)이
-    # 모터 데드존 근처에 머물러 PID 적분 지연 → 실효 회전 거의 안 됨 → lethal 으로 직진.
-    # 정지 회전에 쓰는 ROT_RUNNING_MIN_ANGULAR=0.12 의 이동 버전. DWB min_speed_theta=0.20
-    # 과 동기화하여 controller 의도와 driver 출력이 일치하도록.
-    MOVING_ROT_MIN_ANGULAR = 0.20    # 이동 중 최소 사용 가능한 angular (모터 데드존 위)
-    MOVING_ROT_VX_THRESHOLD = 0.02   # 이 이상의 vx 일 때 적용 (정지 회전 분기와 분리)
-    MOVING_ROT_RELEASE = 0.05        # 이 미만 명령은 그대로 0 처리 (smoother deadband 와 정렬)
-    
+    # [2026-04-28] 직진 측 STARTUP 키크 (angular 측 패턴 미러링)
+    #
+    # 문제: 정지 상태에서 작은 vx 명령 (예: 0.03 m/s) 은 모터 정적마찰 + ESC deadzone
+    #       (MOTOR_IGNORE_PULSE=1600) 을 못 깨고 모터 안 움직임.
+    # 해결: angular 측의 검증된 상태기계 (ROT_MIN_REQUEST_ANGULAR/STARTUP_KICK/...) 를
+    #       linear 측에 동일 패턴으로 미러링. 시작 키크 0.12s × 0.12 m/s → 정적마찰 극복
+    #       → 이후 nav2 요청값 그대로 통과 (path 추종 정밀도 유지).
+    MCU_VX_START_LINEAR = 0.12       # 정적마찰 극복용 시작 속도 (m/s)
+    VX_RUNNING_MIN_LINEAR = 0.05     # 기동 후 유지 최소값. 0.05 미만은 키크 후 정지로
+    VX_MIN_REQUEST_LINEAR = 0.02     # 이 이상이어야 직진 시작 (smoother deadband 와 일관)
+    VX_RELEASE_LINEAR = 0.015        # 이 미만이면 직진 종료 (노이즈 구간)
+    VX_STARTUP_KICK_SEC = 0.12       # 기동 키크 지속 시간 (angular 와 동일)
+    VX_SIGN_HOLD_SEC = 0.25          # 부호 전환 금지 시간 (angular 와 동일)
+
     def __init__(self):
         super().__init__('jupiter_driver_compensated')
         
@@ -233,6 +238,12 @@ class JupiterDriver(Node):
         self._rot_sign = 0
         self._rot_sign_hold_until = 0.0
         self._rot_startup_until = 0.0    # 기동 키크 종료 시각
+
+        # [2026-04-28] 직진 시작 상태기계 변수 (angular 측 패턴 미러링)
+        self._vx_active = False
+        self._vx_sign = 0
+        self._vx_sign_hold_until = 0.0
+        self._vx_startup_until = 0.0     # 기동 키크 종료 시각
         
     def parameter_callback(self, params):
         """Handle parameter updates"""
@@ -345,20 +356,50 @@ class JupiterDriver(Node):
                         angular_corrected = self._rot_sign * self.MCU_ROT_START_ANGULAR
                     else:
                         angular_corrected = 0.0
-            
-            # [2026-04-30] 이동 + 회전 데드존 보상
-            # 정지 회전 분기 (vx<0.02) 에서는 위 STARTUP/RUNNING 키크 처리됨.
-            # 이동 중 (vx≥MOVING_ROT_VX_THRESHOLD) 회전은 여기서 floor 적용:
-            #   |ω| < RELEASE(0.05)  → 0 (smoother deadband 와 일치, 노이즈 컷)
-            #   RELEASE ≤ |ω| < MIN(0.20) → MIN 으로 boost (모터 데드존 안정 통과)
-            #   |ω| ≥ MIN            → 패스스루
-            if abs(vx) >= self.MOVING_ROT_VX_THRESHOLD:
-                raw_abs = abs(angular_corrected)
-                if raw_abs < self.MOVING_ROT_RELEASE:
-                    angular_corrected = 0.0
-                elif raw_abs < self.MOVING_ROT_MIN_ANGULAR:
-                    sign = 1.0 if angular_corrected > 0 else -1.0
-                    angular_corrected = sign * self.MOVING_ROT_MIN_ANGULAR
+
+            # [2026-04-28] 직진 시작 상태기계 (angular 측 패턴 미러링)
+            # idle → STARTUP (키크 0.12s × 0.12 m/s) → RUNNING (패스스루 + RUNNING_MIN 클램프)
+            # 정상 주행 (vx=0.20) 은 첫 0.12s 만 0.12 m/s 로 살짝 느려지고 이후 패스스루 → 영향 미미.
+            now_l = time.monotonic()
+            vx_abs = abs(vx)
+            vx_req_sign = 0
+            if vx > 0.0:
+                vx_req_sign = 1
+            elif vx < 0.0:
+                vx_req_sign = -1
+
+            if self._vx_active:
+                if vx_abs < self.VX_RELEASE_LINEAR or vx_req_sign == 0:
+                    # 정지 명령 → 비활성화
+                    self._vx_active = False
+                    self._vx_sign = 0
+                    vx = 0.0
+                else:
+                    # 부호 전환 검사 (채터링 억제)
+                    if vx_req_sign != self._vx_sign and now_l < self._vx_sign_hold_until:
+                        vx_req_sign = self._vx_sign  # hold 중이면 이전 부호 유지
+                    elif vx_req_sign != self._vx_sign:
+                        # hold 만료 후 방향 전환 허용 → 새 기동 키크 시작
+                        self._vx_sign = vx_req_sign
+                        self._vx_sign_hold_until = now_l + self.VX_SIGN_HOLD_SEC
+                        self._vx_startup_until = now_l + self.VX_STARTUP_KICK_SEC
+
+                    if now_l < self._vx_startup_until:
+                        # STARTUP 단계: 정지마찰 극복용 키크
+                        vx = self._vx_sign * self.MCU_VX_START_LINEAR
+                    else:
+                        # RUNNING 단계: nav2 요청 통과 (RUNNING_MIN 하한 보장)
+                        vx = vx_req_sign * max(vx_abs, self.VX_RUNNING_MIN_LINEAR)
+            else:
+                if vx_abs >= self.VX_MIN_REQUEST_LINEAR and vx_req_sign != 0:
+                    # 유의미한 직진 요청 → 기동 키크와 함께 시작
+                    self._vx_active = True
+                    self._vx_sign = vx_req_sign
+                    self._vx_sign_hold_until = now_l + self.VX_SIGN_HOLD_SEC
+                    self._vx_startup_until = now_l + self.VX_STARTUP_KICK_SEC
+                    vx = self._vx_sign * self.MCU_VX_START_LINEAR
+                else:
+                    vx = 0.0
 
             # Apply minimal deadband to reduce command jitter and motor noise
             # Small values near zero often result from Nav2 controller noise
@@ -377,7 +418,12 @@ class JupiterDriver(Node):
             # - Measures actual wheel speeds via encoders
             # - Adjusts motor PWM to minimize error
             # - Compensates for friction, load, battery voltage automatically
-            self.bot.set_car_motion(vx, vy, angular_corrected)
+            #
+            # 2026-04-28: adjust=True — MCU 의 IMU yaw PID 보정 (Differential_Yaw_Calc) 활성화.
+            #   한쪽 바퀴 마찰 차이(WHEEL L/R 비대칭 8.6% 측정됨)로 인한 직진 중 yaw drift 를
+            #   MCU 가 IMU 기반 자동 보정. CAR_TYPE 바이트의 0x80 비트 = adjust 플래그
+            #   (set_car_run 이 이미 사용 중인 동일 패턴, MCU protocol.c:536 검증).
+            self.bot.set_car_motion(vx, vy, angular_corrected, adjust=True)
             
             # Optional: Log commands for debugging (disabled by default)
             # if abs(vx) > 0.01 or abs(angular) > 0.01:

@@ -55,15 +55,6 @@ class JupiterDriver(Node):
     ROT_RELEASE_ANGULAR = 0.03       # 이 미만이면 회전 종료 (노이즈 구간)
     ROT_STARTUP_KICK_SEC = 0.12      # 기동 키크 지속 시간
     ROT_SIGN_HOLD_SEC = 0.25         # 부호 전환 금지 시간
-
-    # [2026-04-30] 이동 + 회전 데드존 보상
-    # DWB 가 ω≈0.16 같은 작은 angular 을 내면 wheel-level 명령(left=0.10, right=0.06 m/s)이
-    # 모터 데드존 근처에 머물러 PID 적분 지연 → 실효 회전 거의 안 됨 → lethal 으로 직진.
-    # 정지 회전에 쓰는 ROT_RUNNING_MIN_ANGULAR=0.12 의 이동 버전. DWB min_speed_theta=0.20
-    # 과 동기화하여 controller 의도와 driver 출력이 일치하도록.
-    MOVING_ROT_MIN_ANGULAR = 0.20    # 이동 중 최소 사용 가능한 angular (모터 데드존 위)
-    MOVING_ROT_VX_THRESHOLD = 0.02   # 이 이상의 vx 일 때 적용 (정지 회전 분기와 분리)
-    MOVING_ROT_RELEASE = 0.05        # 이 미만 명령은 그대로 0 처리 (smoother deadband 와 정렬)
     
     def __init__(self):
         super().__init__('jupiter_driver_compensated')
@@ -346,20 +337,6 @@ class JupiterDriver(Node):
                     else:
                         angular_corrected = 0.0
             
-            # [2026-04-30] 이동 + 회전 데드존 보상
-            # 정지 회전 분기 (vx<0.02) 에서는 위 STARTUP/RUNNING 키크 처리됨.
-            # 이동 중 (vx≥MOVING_ROT_VX_THRESHOLD) 회전은 여기서 floor 적용:
-            #   |ω| < RELEASE(0.05)  → 0 (smoother deadband 와 일치, 노이즈 컷)
-            #   RELEASE ≤ |ω| < MIN(0.20) → MIN 으로 boost (모터 데드존 안정 통과)
-            #   |ω| ≥ MIN            → 패스스루
-            if abs(vx) >= self.MOVING_ROT_VX_THRESHOLD:
-                raw_abs = abs(angular_corrected)
-                if raw_abs < self.MOVING_ROT_RELEASE:
-                    angular_corrected = 0.0
-                elif raw_abs < self.MOVING_ROT_MIN_ANGULAR:
-                    sign = 1.0 if angular_corrected > 0 else -1.0
-                    angular_corrected = sign * self.MOVING_ROT_MIN_ANGULAR
-
             # Apply minimal deadband to reduce command jitter and motor noise
             # Small values near zero often result from Nav2 controller noise
             if abs(vx) < 0.001:
