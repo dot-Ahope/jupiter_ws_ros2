@@ -49,11 +49,15 @@ class JupiterDriver(Node):
     #   - 채터링 방지: ROT_MIN_REQUEST(0.04) 미만 신호는 시작 자체를 차단
     #     (velocity_smoother deadband=0.05가 0.04 미만 신호를 이미 0으로 만들므로 안전)
     #   - 부호 전환 홀드(0.25s): 좌우 교번 억제는 유지
-    MCU_ROT_START_ANGULAR = 0.37     # 정지마찰 극복용 기동 각속도
+    # [2026-04-30 update] 정지 회전 키크 강화 + adaptive 종료 (encoder 기반)
+    # 이전 (시간 기반 0.12s): MCU PID 적분이 deadzone 까지 올라오기 전 kick 종료 → 무회전 지속.
+    # 현재: kick 강도 0.55 로 상향 + 최대 0.40s 지속, 단 actual ω 가 CONFIRM 임계 도달 시 즉시 전환.
+    MCU_ROT_START_ANGULAR = 0.55     # 정지마찰 극복용 기동 각속도 (0.37→0.55, MCU PID/FF 한계 우회)
     ROT_RUNNING_MIN_ANGULAR = 0.12   # 기동 후 유지 최소값. 0.0526 같은 비현실적 저속 회전 명령 차단
     ROT_MIN_REQUEST_ANGULAR = 0.04   # 이 이상이어야 회전 시작 (smoother deadband 0.05보다 낮아 안전)
     ROT_RELEASE_ANGULAR = 0.03       # 이 미만이면 회전 종료 (노이즈 구간)
-    ROT_STARTUP_KICK_SEC = 0.12      # 기동 키크 지속 시간
+    ROT_STARTUP_KICK_SEC = 0.40      # 기동 키크 최대 지속 시간 (0.12→0.40, encoder 확인 전 안전 상한)
+    ROT_KICK_CONFIRM_THRESHOLD = 0.10  # |actual_z| 가 이 값 이상이면 motion 확인 → kick 조기 종료
     ROT_SIGN_HOLD_SEC = 0.25         # 부호 전환 금지 시간
 
     # [2026-04-30] 이동 + 회전 데드존 보상
@@ -232,7 +236,8 @@ class JupiterDriver(Node):
         self._rot_active = False
         self._rot_sign = 0
         self._rot_sign_hold_until = 0.0
-        self._rot_startup_until = 0.0    # 기동 키크 종료 시각
+        self._rot_startup_until = 0.0    # 기동 키크 최대 종료 시각 (안전 상한)
+        self._rot_motion_confirmed = False  # encoder 로 motion 확인됐는지
         
     def parameter_callback(self, params):
         """Handle parameter updates"""
@@ -311,29 +316,54 @@ class JupiterDriver(Node):
                 elif angular_corrected < 0.0:
                     req_sign = -1
 
+                # encoder 의 actual angular (MCU 보고값). publish_velocity 와 동일 소스.
+                # cmd_vel_callback 직접 read 로 매 명령마다 fresh 값 사용.
+                try:
+                    actual_z = float(self.bot._Rosmaster__vz)
+                except Exception:
+                    actual_z = 0.0
+
                 if self._rot_active:
                     if raw_abs < self.ROT_RELEASE_ANGULAR or req_sign == 0:
                         # 신호가 노이즈 수준으로 떨어졌으면 회전 종료
                         self._rot_active = False
                         self._rot_sign = 0
+                        self._rot_motion_confirmed = False
                         angular_corrected = 0.0
                     else:
                         # 부호 전환 방지 (채터링 억제)
                         if req_sign != self._rot_sign and now < self._rot_sign_hold_until:
                             req_sign = self._rot_sign  # hold 기간 중이면 이전 방향 유지
                         elif req_sign != self._rot_sign:
-                            # hold 만료 후 방향 전환 허용 → 새 기동 키크 시작
+                            # hold 만료 후 방향 전환 허용 → 새 기동 키크 재시작
                             self._rot_sign = req_sign
                             self._rot_sign_hold_until = now + self.ROT_SIGN_HOLD_SEC
                             self._rot_startup_until = now + self.ROT_STARTUP_KICK_SEC
+                            self._rot_motion_confirmed = False
 
-                        if now < self._rot_startup_until:
-                            # STARTUP 단계: 정지마찰 극복용 키크
+                        # [2026-04-30] adaptive kick: encoder actual_z 가 CONFIRM 임계 도달
+                        #   → motion 확인 → kick 즉시 종료 → RUNNING 진입
+                        # confirm 안 되면 ROT_STARTUP_KICK_SEC (0.40s) 까지 kick 유지.
+                        # 이 후엔 안전 상한으로 강제 RUNNING 전환 (모터 고장 등 예외 상황 대비).
+                        if not self._rot_motion_confirmed:
+                            sign_match = (
+                                (self._rot_sign > 0 and actual_z >= self.ROT_KICK_CONFIRM_THRESHOLD) or
+                                (self._rot_sign < 0 and actual_z <= -self.ROT_KICK_CONFIRM_THRESHOLD)
+                            )
+                            if sign_match:
+                                self._rot_motion_confirmed = True
+
+                        if (not self._rot_motion_confirmed) and now < self._rot_startup_until:
+                            # STARTUP 단계: 정지마찰 극복용 키크 유지
                             angular_corrected = self._rot_sign * self.MCU_ROT_START_ANGULAR
                         else:
                             # RUNNING 단계:
                             # 정지 회전에서는 0.0526 같은 DWB 최소 샘플이 실제 하드웨어를 못 움직일 수 있다.
                             # 따라서 완전 패스스루 대신, 기동 후 유지 가능한 하한(0.12)만 보장한다.
+                            if not self._rot_motion_confirmed:
+                                # kick timeout 인데 encoder 미확인 → 안전 상한 도달, 강제 RUNNING.
+                                # 모터 stall 가능성 — stuck_detector 가 별도로 처리.
+                                self._rot_motion_confirmed = True
                             angular_corrected = req_sign * max(raw_abs, self.ROT_RUNNING_MIN_ANGULAR)
                 else:
                     if raw_abs >= self.ROT_MIN_REQUEST_ANGULAR and req_sign != 0:
@@ -342,6 +372,7 @@ class JupiterDriver(Node):
                         self._rot_sign = req_sign
                         self._rot_sign_hold_until = now + self.ROT_SIGN_HOLD_SEC
                         self._rot_startup_until = now + self.ROT_STARTUP_KICK_SEC
+                        self._rot_motion_confirmed = False
                         angular_corrected = self._rot_sign * self.MCU_ROT_START_ANGULAR
                     else:
                         angular_corrected = 0.0
