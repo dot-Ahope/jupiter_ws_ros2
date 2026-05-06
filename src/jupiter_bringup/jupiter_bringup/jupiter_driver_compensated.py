@@ -7,7 +7,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rcl_interfaces.msg import ParameterDescriptor, FloatingPointRange, ParameterType
-from std_msgs.msg import Float32
+from std_msgs.msg import Float32, Float32MultiArray
 from sensor_msgs.msg import Imu
 from geometry_msgs.msg import Twist
 from jupiter_msgs.srv import RobotArm
@@ -53,7 +53,12 @@ class JupiterDriver(Node):
     # 이전 (시간 기반 0.12s): MCU PID 적분이 deadzone 까지 올라오기 전 kick 종료 → 무회전 지속.
     # 현재: kick 강도 0.55 로 상향 + 최대 0.40s 지속, 단 actual ω 가 CONFIRM 임계 도달 시 즉시 전환.
     MCU_ROT_START_ANGULAR = 0.55     # 정지마찰 극복용 기동 각속도 (0.37→0.55, MCU PID/FF 한계 우회)
-    ROT_RUNNING_MIN_ANGULAR = 0.12   # 기동 후 유지 최소값. 0.0526 같은 비현실적 저속 회전 명령 차단
+    # [2026-05-06] 0.12 → 0.30. bag 분석으로 좌회전 명령 cmd_z 평균 0.204 rad/s 시 wheel-level
+    # diff = 0.025 m/s = 1.5 tick (16.3 mm/s/tick) 으로 모터 deadzone 미달 → 68.8% 정지 확인.
+    # 0.30 으로 boost 하면 wheel-level diff = 0.037 m/s = 2.3 tick → 통과 가능.
+    # 부작용: MPPI 의 trajectory rollout 예측 (작은 ω) 과 실제 거동 (0.30) 불일치 → 진동 가능.
+    # 임시 해결책. 근본은 펌웨어 양방향 deadzone 캘리브레이션 (옵션 B).
+    ROT_RUNNING_MIN_ANGULAR = 0.30   # 정지 회전 RUNNING 단계 floor
     ROT_MIN_REQUEST_ANGULAR = 0.04   # 이 이상이어야 회전 시작 (smoother deadband 0.05보다 낮아 안전)
     ROT_RELEASE_ANGULAR = 0.03       # 이 미만이면 회전 종료 (노이즈 구간)
     ROT_STARTUP_KICK_SEC = 0.40      # 기동 키크 최대 지속 시간 (0.12→0.40, encoder 확인 전 안전 상한)
@@ -177,8 +182,16 @@ class JupiterDriver(Node):
             10
         )
         self.vel_pub = self.create_publisher(
-            Twist, 
-            '/jupiter/get_vel', 
+            Twist,
+            '/jupiter/get_vel',
+            10
+        )
+        # [2026-05-06] 좌/우 휠 속도 (m/s) publish.
+        # data[0]=LEFT (M1), data[1]=RIGHT (M3). MCU FUNC_REPORT_WHEEL_SPEED (0x08) 25Hz 송출.
+        # 진단 목적: 비대칭 deadzone, path 추종 시 좌우 회전 방향 검증.
+        self.wheel_speeds_pub = self.create_publisher(
+            Float32MultiArray,
+            '/jupiter/wheel_speeds',
             10
         )
         # 별도의 가속도 변화량 토픽 추가 (움직임 감지용)
@@ -217,6 +230,8 @@ class JupiterDriver(Node):
         # Create timers - IMU 데이터의 빈도 더 높게 설정
         self.create_timer(0.01, self.publish_imu)  # 100Hz (0.01s)
         self.create_timer(0.02, self.publish_velocity)  # 50Hz (0.02s) - 10Hz에서 증가
+        # [2026-05-06] 휠 속도 publish — MCU FUNC_REPORT_WHEEL_SPEED 가 25Hz 라 그에 맞춰 40ms.
+        self.create_timer(0.04, self.publish_wheel_speeds)  # 25Hz
         self.create_timer(5.0, self.check_serial_health)  # 5초마다 시리얼 상태 확인
         self._serial_was_ok = True  # 최초 상태 추적 (로그 중복 방지)
         
@@ -606,9 +621,27 @@ class JupiterDriver(Node):
             msg.angular.z = float(vz_scaled)  # Inverse scaled for consistency
             
             self.vel_pub.publish(msg)
-            
+
         except Exception as e:
             # Silently fail to avoid log spam
+            pass
+
+    def publish_wheel_speeds(self):
+        """
+        [2026-05-06] 좌/우 휠 속도 (m/s) 를 /jupiter/wheel_speeds 로 publish.
+        Float32MultiArray.data = [left_mps, right_mps].
+
+        매핑: M1=LEFT, M3=RIGHT (Jupiter 차동구동, M2/M4 미사용).
+        소스: MCU FUNC_REPORT_WHEEL_SPEED (25Hz). Rosmaster_Lib.get_wheel_speeds().
+
+        Note: vx 와 다르게 부호 반전 안 함. MCU encoder PID feedback 의 wheel-frame 그대로.
+        """
+        try:
+            left_mps, right_mps = self.bot.get_wheel_speeds()
+            msg = Float32MultiArray()
+            msg.data = [float(left_mps), float(right_mps)]
+            self.wheel_speeds_pub.publish(msg)
+        except Exception:
             pass
 
     def RobotArmCallback(self, request, response):

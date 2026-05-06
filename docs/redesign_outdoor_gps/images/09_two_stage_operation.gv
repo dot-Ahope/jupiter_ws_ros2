@@ -1,0 +1,61 @@
+digraph TwoStageOperation {
+    rankdir=LR;
+    bgcolor="white";
+    node [fontname="Noto Sans CJK KR" fontsize=11 style=filled];
+    edge [fontname="Noto Sans CJK KR" fontsize=10];
+    graph [fontname="Noto Sans CJK KR" fontsize=14 label="2단계 운영 전략 — SW 자산 보존 + 차체 swap" labelloc=t];
+
+    subgraph cluster_a {
+        label="단계 A — SW 검증 (현 차체)"; style=filled; fillcolor="#E6F3FF"; fontsize=13;
+
+        a_chassis [label="Yahboom Jupiter X3\n(현 차체)" shape=box3d fillcolor="#FFE4E1"];
+        a_site [label="평탄지 부지\n(공원/주차장/평지)" shape=note fillcolor="#FFFFE0"];
+        a_speed [label="저속 0.20 m/s\n안전 우선" shape=note fillcolor="#FFFFE0"];
+        a_check [label="✅ §6 Phase 0~3\n검증 항목 통과" shape=cds fillcolor="#90EE90"];
+    }
+
+    subgraph cluster_assets {
+        label="검증된 SW 자산 (차체 독립)"; style=filled; fillcolor="#F0FFF0"; fontsize=13;
+
+        sw1 [label="jupiter_gps_nav\n(waypoint follower)" fillcolor="#FFE4B5"];
+        sw2 [label="dual_rtk_heading_node\nGPS quality FSM" fillcolor="#FFE4B5"];
+        sw3 [label="EKF + navsat config\nKISS-ICP" fillcolor="#FFE4B5"];
+        sw4 [label="custom BT\n(GPS 분기)" fillcolor="#FFE4B5"];
+    }
+
+    subgraph cluster_b {
+        label="단계 B — 본 운용 (신규 차체)"; style=filled; fillcolor="#FFF0F5"; fontsize=13;
+
+        b_chassis [label="AgileX Scout Mini\n또는 Husky\n또는 자작 트랙" shape=box3d fillcolor="#90EE90"];
+        b_site [label="농경지 / 임야\n실 운용" shape=note fillcolor="#FFFFE0"];
+        b_speed [label="0.30~0.60 m/s\n페이로드↑ 안정" shape=note fillcolor="#FFFFE0"];
+        b_swap [label="swap-in:\nURDF / driver / PID" shape=cds fillcolor="#FFA500"];
+    }
+
+    a_chassis -> a_check [label="검증"];
+    a_site -> a_check;
+    a_speed -> a_check;
+
+    a_check -> sw1 [color=darkgreen penwidth=2];
+    a_check -> sw2 [color=darkgreen penwidth=2];
+    a_check -> sw3 [color=darkgreen penwidth=2];
+    a_check -> sw4 [color=darkgreen penwidth=2];
+
+    sw1 -> b_swap [color=blue style=dashed];
+    sw2 -> b_swap [color=blue style=dashed];
+    sw3 -> b_swap [color=blue style=dashed];
+    sw4 -> b_swap [color=blue style=dashed];
+
+    b_swap -> b_chassis [label="이식\n2~3주"];
+    b_chassis -> b_site;
+    b_chassis -> b_speed;
+
+    note [shape=note fillcolor="#FFFFE0" label=<
+        <B>모듈 분리 원칙</B><BR/>
+        <BR ALIGN="LEFT"/>• jupiter_driver: 차체별 swap
+        <BR ALIGN="LEFT"/>• URDF: 차체별 분리
+        <BR ALIGN="LEFT"/>• jupiter_gps_nav: 차체 독립
+        <BR ALIGN="LEFT"/>• EKF/navsat config: 차체 독립
+        <BR ALIGN="LEFT"/>
+    >];
+}

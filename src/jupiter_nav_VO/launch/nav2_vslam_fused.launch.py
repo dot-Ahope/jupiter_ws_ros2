@@ -54,7 +54,7 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction, ExecuteProcess
 from launch.substitutions import LaunchConfiguration, Command
 from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -511,6 +511,41 @@ def generate_launch_description():
     )
 
     # ============================================================
+    # [2026-05-06] 자동 bag 기록
+    # ============================================================
+    # 매 launch 시 동일 경로 (/home/jetson/bags/latest) 에 덮어쓰기 — 디스크 누적 방지.
+    # 기록 분석 보존이 필요하면 사용자가 수동으로 mv /home/jetson/bags/latest /home/jetson/bags/keep_NAME 으로 백업.
+    # ros2 bag 은 동일 디렉토리 존재 시 에러 → bash -c 로 rm -rf 후 record.
+    # safety_layer 와 동일 5초 지연으로 driver / scan_merger / cmd_vel 토픽 모두 활성 후 시작.
+    BAG_TOPICS = " ".join([
+        "/plan", "/local_plan",
+        "/cmd_vel", "/cmd_vel_nav_filtered", "/cmd_vel_safe",
+        "/cmd_vel_force", "/cmd_vel_joy",
+        "/jupiter/get_vel", "/jupiter/imu", "/jupiter/wheel_speeds",
+        "/odom", "/odometry/global", "/odometry/local",
+        "/tf", "/tf_static",
+        "/scan_merged", "/scan", "/scan_back",
+        "/goal_pose", "/stuck_status",
+        "/local_costmap/costmap_updates",
+        "/global_costmap/costmap_updates",
+        "/controller_server/transition_event",
+    ])
+    BAG_OUTPUT = "/home/jetson/bags/latest"
+    bag_recorder = TimerAction(
+        period=6.0,
+        actions=[
+            ExecuteProcess(
+                cmd=[
+                    'bash', '-c',
+                    f'mkdir -p /home/jetson/bags && rm -rf {BAG_OUTPUT} && '
+                    f'exec ros2 bag record -o {BAG_OUTPUT} {BAG_TOPICS}'
+                ],
+                output='screen',
+            )
+        ]
+    )
+
+    # ============================================================
     # 12. SLAM Toolbox (맵 생성 + map→odom TF)
     # ============================================================
     # SLAM Toolbox가 /scan_merged(LiDAR+Depth) + odom→base_footprint TF를 사용하여:
@@ -691,6 +726,9 @@ def generate_launch_description():
         # 9-C. Safety Layer (Tier 2: twist_mux + stuck_detector + forced_recovery + alert)
         # cmd_vel pipeline: nav2/cmd_vel + cmd_vel_joy + cmd_vel_force → twist_mux → /cmd_vel_safe → driver
         safety_layer,
+
+        # 9-D. [2026-05-06] 자동 bag 기록 (/home/jetson/bags/latest, 매 launch 덮어쓰기)
+        bag_recorder,
 
         # 10. SLAM Toolbox (delayed)
         delayed_slam_toolbox,

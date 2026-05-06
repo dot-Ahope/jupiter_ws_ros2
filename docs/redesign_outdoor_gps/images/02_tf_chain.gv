@@ -1,0 +1,37 @@
+digraph TFChain {
+    rankdir=TB;
+    bgcolor="white";
+    node [fontname="Noto Sans CJK KR" fontsize=11 style=filled shape=box fillcolor="#E6F3FF"];
+    edge [fontname="Noto Sans CJK KR" fontsize=9];
+    graph [fontname="Noto Sans CJK KR" fontsize=14 label="TF 좌표계 체인 (야외 GPS 모드)" labelloc=t];
+
+    earth [label="earth\n(UTM, mapviz 정렬용)" fillcolor="#FFD700"];
+    map [label="map\n(navsat_transform 기준 datum)" fillcolor="#FFA500"];
+    odom [label="odom\n(global EKF 발행)" fillcolor="#90EE90"];
+    base_fp [label="base_footprint\n(local EKF 발행, z=0)" fillcolor="#90EE90"];
+    base [label="base_link\n(URDF 차체 중심)"];
+    velo [label="velodyne"];
+    cam [label="camera_link"];
+    imu [label="imu_link"];
+    gps_main [label="gps_antenna_main"];
+    gps_aux [label="gps_antenna_aux\n(NEW: heading)" fillcolor="#FFE4B5" color=red penwidth=2];
+
+    earth -> map [label="UTM 변환\n(broadcast_utm_transform)"];
+    map -> odom [label="global EKF\n(map→odom 보정)" color=blue];
+    odom -> base_fp [label="local EKF\n(odom→base 적분)" color=blue];
+    base_fp -> base [label="static\nz=0.08m" style=dashed];
+    base -> velo [style=dashed];
+    base -> cam [style=dashed];
+    base -> imu [style=dashed];
+    base -> gps_main [style=dashed];
+    base -> gps_aux [style=dashed color=red];
+
+    note [shape=note fillcolor="#FFFFE0" label=<
+        <B>좌표계 의미</B><BR/>
+        <BR ALIGN="LEFT"/>• earth: 절대 (UTM)
+        <BR ALIGN="LEFT"/>• map: 미션 시작 datum
+        <BR ALIGN="LEFT"/>• odom: 연속·부드러움 (적분)
+        <BR ALIGN="LEFT"/>• base_footprint: z=0 노면 투영
+        <BR ALIGN="LEFT"/>
+    >];
+}

@@ -1,0 +1,45 @@
+digraph MissionWorkflow {
+    rankdir=TB;
+    bgcolor="white";
+    node [fontname="Noto Sans CJK KR" fontsize=11 style=filled shape=box];
+    edge [fontname="Noto Sans CJK KR" fontsize=10];
+    graph [fontname="Noto Sans CJK KR" fontsize=14 label="미션 워크플로 + Behavior Tree" labelloc=t];
+
+    user [label="사용자\n(미션 입력)" shape=ellipse fillcolor="#FFD700"];
+    yaml [label="waypoints.yaml\n[lat, lon, tol, max_vel]" fillcolor="#E6F3FF"];
+    mapviz [label="mapviz 클릭\n(/clicked_point)" fillcolor="#E6F3FF"];
+
+    logger [label="gps_waypoint_logger\n(yaml append)" fillcolor="#FFE4B5"];
+    follower [label="gps_waypoint_follower\n(/fromLL → map x,y)" fillcolor="#FFE4B5"];
+
+    subgraph cluster_bt {
+        label="Behavior Tree (bt_outdoor_navigate.xml)"; style=filled; fillcolor="#F0FFF0"; fontsize=12;
+        nav_thru [label="NavigateThroughPoses\n(메인 액션)" fillcolor="#90EE90"];
+        cond [label="GpsQualityCheck\n(매 틱)" fillcolor="#FFFFE0" shape=diamond];
+
+        rmv [label="RemovePassedGoals" fillcolor="#90EE90"];
+
+        wait [label="Wait 5s\n(WAIT 정책)" fillcolor="#FFFFE0"];
+        dr_act [label="ForceMaxVel 0.15\n(DR_CONTINUE)" fillcolor="#FFA500"];
+        stop_act [label="CancelGoals\n(STOP_SAFE)" fillcolor="#FF6347"];
+    }
+
+    nav2 [label="Nav2 controller\n(DWB)" fillcolor="#90EE90"];
+    cmd [label="/cmd_vel" shape=ellipse];
+    robot [label="Jupiter 로버" fillcolor="#FFD700" shape=ellipse];
+
+    user -> yaml;
+    user -> mapviz -> logger -> yaml;
+    yaml -> follower;
+
+    follower -> nav_thru;
+    nav_thru -> cond;
+    cond -> rmv [label="OK"];
+    cond -> wait [label="NO_FIX & WAIT" color=red];
+    cond -> dr_act [label="NO_FIX & DR" color=red];
+    cond -> stop_act [label="NO_FIX & STOP" color=red];
+
+    rmv -> nav2;
+    nav2 -> cmd -> robot;
+    robot -> cond [label="피드백" style=dashed];
+}

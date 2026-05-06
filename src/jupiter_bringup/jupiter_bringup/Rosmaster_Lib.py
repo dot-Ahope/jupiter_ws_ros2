@@ -41,6 +41,8 @@ class Rosmaster(object):
         self.FUNC_RGB_EFFECT = 0x06
         self.FUNC_PORT_ON_OFF = 0x07
 
+        # [2026-05-06] 좌/우 휠 속도 보고 (mm/s, M1=L M3=R). 펌웨어 protocol.h:23 동기화.
+        self.FUNC_REPORT_WHEEL_SPEED = 0x08
         self.FUNC_REPORT_MAG = 0x09
         self.FUNC_REPORT_SPEED = 0x0A
         self.FUNC_REPORT_MPU_RAW = 0x0B
@@ -89,6 +91,9 @@ class Rosmaster(object):
         self.__vx = 0
         self.__vy = 0
         self.__vz = 0
+        # [2026-05-06] per-wheel speed (m/s). M1=LEFT, M3=RIGHT. M2/M4 미사용 (Jupiter 차동구동 2-모터).
+        self.__wheel_left_mps = 0.0
+        self.__wheel_right_mps = 0.0
 
         self.__yaw = 0
         self.__roll = 0
@@ -146,6 +151,11 @@ class Rosmaster(object):
     # According to the type of data frame to make the corresponding parsing
     def __parse_data(self, ext_type, ext_data):
         # print("parse_data:", ext_data, ext_type)
+        # [2026-05-06] 좌/우 휠 속도 (mm/s, int16) → m/s 변환 후 저장.
+        if ext_type == self.FUNC_REPORT_WHEEL_SPEED:
+            self.__wheel_left_mps  = int(struct.unpack('h', bytearray(ext_data[0:2]))[0]) / 1000.0
+            self.__wheel_right_mps = int(struct.unpack('h', bytearray(ext_data[2:4]))[0]) / 1000.0
+            return
         if ext_type == self.FUNC_REPORT_SPEED:
             # print(ext_data)
             self.__vx = int(struct.unpack('h', bytearray(ext_data[0:2]))[0]) / 1000.0
@@ -1216,6 +1226,11 @@ class Rosmaster(object):
         val_vz = self.__vz
         # self.__vx, self.__vy, self.__vz = 0, 0, 0
         return val_vx, val_vy, val_vz
+
+    # [2026-05-06] 좌/우 휠 속도 (m/s) — Jupiter 차동구동: M1=LEFT, M3=RIGHT.
+    # 반환: (left_mps, right_mps).
+    def get_wheel_speeds(self):
+        return self.__wheel_left_mps, self.__wheel_right_mps
 
     # 获取电池电压值
     # Get the battery voltage

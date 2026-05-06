@@ -1,0 +1,51 @@
+digraph SensorLayout {
+    rankdir=TB;
+    bgcolor="white";
+    node [fontname="Noto Sans CJK KR" fontsize=11 style=filled];
+    edge [style=invis];
+    graph [fontname="Noto Sans CJK KR" fontsize=14 label="센서 / 안전장치 배치도 (Top View, base_link 중심)" labelloc=t];
+
+    subgraph cluster_robot {
+        label="Jupiter 차체 (위에서 본 도면)"; style=filled; fillcolor="#F5F5DC"; fontsize=12;
+
+        gps_main [label="GPS 안테나 #1\n(main, /fix)\n전방 상부\n+ ground plane Ø100mm" shape=circle fillcolor="#90EE90"];
+        gps_aux [label="GPS 안테나 #2\n(aux, /heading)\n후방 상부\n← NEW" shape=circle fillcolor="#FFE4B5" color=red penwidth=2];
+        velo [label="Velodyne VLP-16\n중앙 상부\n(360° 시야)" shape=box fillcolor="#B0E0E6"];
+        rs [label="RealSense D455f\n전방\n(보조 depth)" shape=box fillcolor="#D3D3D3"];
+        cam_rear [label="후방 카메라\n(IMX219 / USB)\n← NEW" shape=box fillcolor="#FFE4B5" color=red penwidth=2];
+        imu [label="MCU IMU\n중앙 내부" shape=box fillcolor="#B0E0E6"];
+        rplidar [label="RPLidar (2D)\n후방 yaw=180°" shape=box fillcolor="#B0E0E6"];
+
+        estop [label="E-stop 버튼\n(차체 외부 추제)\n← NEW" shape=octagon fillcolor="#FF6347" color=red penwidth=2];
+        lte [label="LTE/4G 모뎀\n(NTRIP 통신)\n← NEW" shape=box fillcolor="#FFE4B5" color=red penwidth=2];
+
+        front [label="↑ 전방" shape=plaintext fontsize=14];
+        rear [label="↓ 후방" shape=plaintext fontsize=14];
+
+        wheel_l [label="◯\n좌측 휠" shape=plaintext];
+        wheel_r [label="◯\n우측 휠" shape=plaintext];
+    }
+
+    {rank=same; front;}
+    {rank=same; gps_main; rs;}
+    {rank=same; estop; velo; lte;}
+    {rank=same; wheel_l; imu; wheel_r;}
+    {rank=same; gps_aux; cam_rear; rplidar;}
+    {rank=same; rear;}
+
+    front -> gps_main;
+    gps_main -> velo;
+    velo -> imu;
+    imu -> gps_aux;
+    gps_aux -> rear;
+
+    note [shape=note fillcolor="#FFFFE0" label=<
+        <B>핵심 구성</B><BR/>
+        <BR ALIGN="LEFT"/>• Dual-antenna baseline ≥ 1.0 m
+        <BR ALIGN="LEFT"/>• GPS ground plane Ø100mm (멀티패스↓)
+        <BR ALIGN="LEFT"/>• E-stop: cmd_vel 차단 + MCU EN 직결
+        <BR ALIGN="LEFT"/>• LTE: NTRIP RTCM 수신
+        <BR ALIGN="LEFT"/>• Heading 오차 &lt; 0.5°
+        <BR ALIGN="LEFT"/>
+    >];
+}

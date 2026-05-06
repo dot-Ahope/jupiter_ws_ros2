@@ -1,0 +1,82 @@
+digraph SystemArchitecture {
+    rankdir=LR;
+    bgcolor="white";
+    node [fontname="Noto Sans CJK KR" fontsize=11 style=filled shape=box];
+    edge [fontname="Noto Sans CJK KR" fontsize=9];
+    graph [fontname="Noto Sans CJK KR" fontsize=14 label="Jupiter 야외 GPS 자율주행 시스템 아키텍처" labelloc=t];
+
+    subgraph cluster_sensors {
+        label="센서 레이어"; style=filled; fillcolor="#E8F4F8"; fontsize=12;
+        gps1 [label="ZED-F9P #1\n(절대 위치)" fillcolor="#B0E0E6"];
+        gps2 [label="ZED-F9P #2\n(NEW: heading)" fillcolor="#FFE4B5" color=red penwidth=2];
+        imu [label="MCU IMU\n(gyro)"  fillcolor="#B0E0E6"];
+        enc [label="휠 인코더" fillcolor="#B0E0E6"];
+        velo [label="Velodyne VLP-16" fillcolor="#B0E0E6"];
+        rs [label="RealSense D455f\n(보조)" fillcolor="#D3D3D3"];
+    }
+
+    subgraph cluster_drivers {
+        label="드라이버 / 전처리"; style=filled; fillcolor="#FFF8DC"; fontsize=12;
+        ntrip [label="rtcm_ublox_bridge\n+ NTRIP"];
+        f9p_drv [label="zed_f9p_rtk\n→ /fix"];
+        heading [label="dual_rtk_heading\n(NEW)\n→ /heading" fillcolor="#FFE4B5" color=red penwidth=2];
+        imu_calib [label="imu_calib\n→ /imu/data_calibrated"];
+        base_node [label="jupiter_driver\n→ /odom_raw"];
+        kiss [label="KISS-ICP\n→ /kiss/odometry"];
+    }
+
+    subgraph cluster_fusion {
+        label="센서 융합 / 위치추정"; style=filled; fillcolor="#F0FFF0"; fontsize=12;
+        ekf_local [label="EKF (local)\nodom→base_footprint"];
+        ekf_global [label="EKF (global)\nmap→odom"];
+        navsat [label="navsat_transform\n/fix → /odometry/gps"];
+        fsm [label="gps_quality_fsm\n(NEW)\n/gps_quality" fillcolor="#FFE4B5" color=red penwidth=2];
+    }
+
+    subgraph cluster_planning {
+        label="미션 / Nav2"; style=filled; fillcolor="#FFE4E1"; fontsize=12;
+        wp_log [label="waypoint_logger\n(NEW)" fillcolor="#FFE4B5" color=red penwidth=2];
+        wp_fol [label="waypoint_follower\n(NEW: /fromLL)" fillcolor="#FFE4B5" color=red penwidth=2];
+        bt [label="Custom BT\n(NEW: GPS분기)" fillcolor="#FFE4B5" color=red penwidth=2];
+        nav2 [label="Nav2 stack\n(DWB + costmaps)"];
+    }
+
+    subgraph cluster_control {
+        label="제어 / 안전"; style=filled; fillcolor="#FFEFD5"; fontsize=12;
+        twistmux [label="twist_mux"];
+        col [label="collision_monitor"];
+        mcu [label="MCU 모터 제어"];
+    }
+
+    gps1 -> f9p_drv -> navsat;
+    ntrip -> f9p_drv [label="RTCM"];
+    gps2 -> heading;
+    imu -> imu_calib;
+    enc -> base_node;
+    velo -> kiss;
+
+    base_node -> ekf_local;
+    imu_calib -> ekf_local;
+    base_node -> ekf_global [label="vx,vyaw"];
+    imu_calib -> ekf_global [label="vyaw"];
+    heading -> ekf_global [label="yaw"];
+    kiss -> ekf_global [label="x,y,yaw"];
+    navsat -> ekf_global [label="x,y"];
+    f9p_drv -> fsm;
+    fsm -> ekf_global [label="cov 동적조정" style=dashed];
+
+    ekf_global -> nav2 [label="/odometry/global"];
+    velo -> nav2 [label="costmap" style=dashed];
+
+    wp_log -> wp_fol [label="yaml"];
+    wp_fol -> bt [label="NavigateThroughPoses"];
+    fsm -> bt [label="/gps_quality"];
+    bt -> nav2;
+
+    nav2 -> twistmux -> col -> mcu [label="/cmd_vel"];
+
+    legend [shape=plaintext fillcolor=white label=<
+        <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
+        <TR><TD BGCOLOR="#B0E0E6">기존</TD><TD BGCOLOR="#FFE4B5">신규</TD><TD BGCOLOR="#D3D3D3">보조</TD></TR>
+        </TABLE>>];
+}

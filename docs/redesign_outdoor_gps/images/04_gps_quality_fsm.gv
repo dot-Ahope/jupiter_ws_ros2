@@ -1,0 +1,38 @@
+digraph GPSQualityFSM {
+    rankdir=LR;
+    bgcolor="white";
+    node [fontname="Noto Sans CJK KR" fontsize=11 style=filled shape=ellipse];
+    edge [fontname="Noto Sans CJK KR" fontsize=9];
+    graph [fontname="Noto Sans CJK KR" fontsize=14 label="GPS Quality 상태 머신 (gps_quality_fsm_node)" labelloc=t];
+
+    rtk_fix [label="RTK_FIX\nqual=4, σ<0.05m\ncov×1, max_vel 0.30 m/s" fillcolor="#90EE90"];
+    rtk_float [label="RTK_FLOAT\nqual=5, σ<0.5m\ncov×3, max_vel 0.20 m/s" fillcolor="#FFFFE0"];
+    fix_3d [label="3D_FIX\nqual≤3, σ<5m\ncov×10, max_vel 0.15 m/s" fillcolor="#FFA500"];
+    no_fix [label="NO_FIX / STALE\ntimeout>2s\nGPS disabled" fillcolor="#FF6347"];
+
+    rtk_fix -> rtk_float [label="cov 0.05~0.5"];
+    rtk_float -> rtk_fix [label="cov<0.05 회복"];
+    rtk_float -> fix_3d [label="cov 0.5~5"];
+    fix_3d -> rtk_float [label="cov<0.5 회복"];
+    fix_3d -> no_fix [label="timeout"];
+    no_fix -> fix_3d [label="fix 복귀"];
+
+    subgraph cluster_action {
+        label="NO_FIX 시 정책 분기 (on_rtk_loss)"; style=filled; fillcolor="#FFF0F5"; fontsize=11;
+        wait [label="WAIT\n(5s 후 재평가)" shape=box fillcolor="#FFFFE0"];
+        dr [label="DR_CONTINUE\n(0.15 m/s 강제 진행)" shape=box fillcolor="#FFFFE0"];
+        stop [label="STOP_SAFE\n(Cancel + 알람)" shape=box fillcolor="#FFFFE0"];
+    }
+
+    no_fix -> wait [style=dashed color=gray];
+    no_fix -> dr [style=dashed color=gray];
+    no_fix -> stop [style=dashed color=gray];
+
+    note [shape=note fillcolor="#FFFFE0" label=<
+        <B>출력 토픽</B><BR/>
+        <BR ALIGN="LEFT"/>• /gps_quality (UInt8)
+        <BR ALIGN="LEFT"/>• BT condition node 가 구독
+        <BR ALIGN="LEFT"/>• mapviz 위젯 표시
+        <BR ALIGN="LEFT"/>
+    >];
+}

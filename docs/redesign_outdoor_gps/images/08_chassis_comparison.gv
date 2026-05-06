@@ -1,0 +1,84 @@
+digraph ChassisComparison {
+    rankdir=TB;
+    bgcolor="white";
+    node [fontname="Noto Sans CJK KR" fontsize=10 style=filled shape=box];
+    edge [fontname="Noto Sans CJK KR" fontsize=9];
+    graph [fontname="Noto Sans CJK KR" fontsize=14 label="차체 비교 — 현재 (Yahboom) vs 업그레이드 후보" labelloc=t];
+
+    current [label=<
+        <B>현재: Yahboom Jupiter X3</B><BR/>
+        <BR ALIGN="LEFT"/>• 휠 직경 70mm, 차폭 171mm
+        <BR ALIGN="LEFT"/>• 차체 1.1 kg
+        <BR ALIGN="LEFT"/>• MCU: STM32F103
+        <BR ALIGN="LEFT"/>• 최대 0.45 m/s
+        <BR ALIGN="LEFT"/>• 페이로드 ~ 2~3 kg
+        <BR ALIGN="LEFT"/>• 배터리 8.4V
+        <BR ALIGN="LEFT"/>• <FONT COLOR="red">농경지/임야 부적합</FONT>
+        <BR ALIGN="LEFT"/>
+    > fillcolor="#FFE4E1"];
+
+    arrow [label="업그레이드" shape=plaintext fontsize=14];
+
+    scout_mini [label=<
+        <B>★ AgileX Scout Mini (1차 추천)</B><BR/>
+        <BR ALIGN="LEFT"/>• 4×BLDC + CAN bus
+        <BR ALIGN="LEFT"/>• 페이로드 10 kg
+        <BR ALIGN="LEFT"/>• 최대 1.5 m/s
+        <BR ALIGN="LEFT"/>• <FONT COLOR="green">ROS2 driver 공식</FONT>
+        <BR ALIGN="LEFT"/>• 이식 3~5일
+        <BR ALIGN="LEFT"/>• 가격: 중
+        <BR ALIGN="LEFT"/>
+    > fillcolor="#90EE90" color=darkgreen penwidth=2];
+
+    scout2 [label=<
+        <B>AgileX Scout 2.0</B><BR/>
+        <BR ALIGN="LEFT"/>• 4×Hub motor
+        <BR ALIGN="LEFT"/>• 페이로드 50 kg
+        <BR ALIGN="LEFT"/>• 최대 1.5 m/s
+        <BR ALIGN="LEFT"/>• 농경지 검증
+        <BR ALIGN="LEFT"/>• IP54 비방수
+        <BR ALIGN="LEFT"/>• 가격: 고
+        <BR ALIGN="LEFT"/>
+    > fillcolor="#B0E0E6"];
+
+    husky [label=<
+        <B>Clearpath Husky A200</B><BR/>
+        <BR ALIGN="LEFT"/>• BLDC, ROS native
+        <BR ALIGN="LEFT"/>• 페이로드 75 kg
+        <BR ALIGN="LEFT"/>• 표준 농업/연구
+        <BR ALIGN="LEFT"/>• <FONT COLOR="green">방수 + E-stop 내장</FONT>
+        <BR ALIGN="LEFT"/>• 이식 2~3일 (drop-in)
+        <BR ALIGN="LEFT"/>• 가격: 매우 고
+        <BR ALIGN="LEFT"/>
+    > fillcolor="#B0E0E6"];
+
+    diy [label=<
+        <B>자작 트랙(caterpillar)</B><BR/>
+        <BR ALIGN="LEFT"/>• 24V BLDC × 2
+        <BR ALIGN="LEFT"/>• Roboclaw 또는 ODrive
+        <BR ALIGN="LEFT"/>• 또는 Pixhawk + Skid Steering
+        <BR ALIGN="LEFT"/>• 비정형 통과 ★★★
+        <BR ALIGN="LEFT"/>• 이식 1~3주
+        <BR ALIGN="LEFT"/>• 가격: 가변 / 노력 多
+        <BR ALIGN="LEFT"/>
+    > fillcolor="#FFFFE0"];
+
+    {rank=same; current;}
+    {rank=same; arrow;}
+    {rank=same; scout_mini; scout2; husky; diy;}
+
+    current -> arrow [style=dashed];
+    arrow -> scout_mini [style=dashed];
+    arrow -> scout2 [style=dashed];
+    arrow -> husky [style=dashed];
+    arrow -> diy [style=dashed];
+
+    note [shape=note fillcolor="#FFFFE0" label=<
+        <B>2단계 운영 전략</B><BR/>
+        <BR ALIGN="LEFT"/>단계 A: 현 차체로 SW 검증 (즉시)
+        <BR ALIGN="LEFT"/>단계 B: 신규 차체 도착 후 본 운용
+        <BR ALIGN="LEFT"/>jupiter_gps_nav 등 SW 자산은
+        <BR ALIGN="LEFT"/>차체와 무관하게 그대로 이식
+        <BR ALIGN="LEFT"/>
+    >];
+}

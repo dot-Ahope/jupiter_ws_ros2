@@ -1,0 +1,79 @@
+digraph PowerSafety {
+    rankdir=LR;
+    bgcolor="white";
+    node [fontname="Noto Sans CJK KR" fontsize=11 style=filled shape=box];
+    edge [fontname="Noto Sans CJK KR" fontsize=10];
+    graph [fontname="Noto Sans CJK KR" fontsize=14 label="전원 / 안전 / 통신 블록도 (단계 B 통합)" labelloc=t];
+
+    subgraph cluster_power {
+        label="전원 분배"; style=filled; fillcolor="#FFEFD5"; fontsize=12;
+        battery [label="LiPo 22V 6S\n(대용량)\n← NEW" fillcolor="#FFE4B5"];
+        bms [label="BMS\n과전압/저전압 보호" fillcolor="#FFE4B5"];
+        dc19 [label="DC-DC 24→19V\n(Jetson)" fillcolor="#FFFFE0"];
+        dc12 [label="DC-DC 24→12V\n(Velodyne / RealSense)" fillcolor="#FFFFE0"];
+        dc5 [label="DC-DC 24→5V\n(LTE / 카메라 / GPIO)" fillcolor="#FFFFE0"];
+    }
+
+    subgraph cluster_safety {
+        label="안전 레이어"; style=filled; fillcolor="#FFE4E1"; fontsize=12;
+        estop [label="E-stop 버튼\n(외부 추제)\n← NEW" shape=octagon fillcolor="#FF6347"];
+        relay [label="릴레이 모듈\n(cmd_vel 차단)" fillcolor="#FFA500"];
+        mcu_en [label="MCU EN 핀\n(SW 무관 모터 정지)" fillcolor="#FFA500"];
+    }
+
+    subgraph cluster_comm {
+        label="통신"; style=filled; fillcolor="#E6F3FF"; fontsize=12;
+        lte [label="LTE/4G 모뎀\n(USB 동글)\n← NEW" fillcolor="#B0E0E6"];
+        wifi [label="WiFi (개발)" fillcolor="#D3D3D3"];
+        ntrip_remote [label="NTRIP 서버\n(외부)" shape=cylinder fillcolor="#FFFFE0"];
+    }
+
+    subgraph cluster_compute {
+        label="컴퓨팅 / 액추에이터"; style=filled; fillcolor="#F0FFF0"; fontsize=12;
+        jetson [label="Jetson Orin Nano Super\n7.4GB RAM\n+ NVMe (로깅)" fillcolor="#90EE90"];
+        mcu [label="STM32F103 MCU\n(현재) 또는\n신규 차체 컨트롤러" fillcolor="#90EE90"];
+        motor [label="모터 (×2 또는 ×4)" fillcolor="#FFFFE0"];
+    }
+
+    subgraph cluster_alarm {
+        label="알람 / 표시"; style=filled; fillcolor="#FFF0F5"; fontsize=12;
+        buzz [label="부저\n← NEW" fillcolor="#FFE4B5"];
+        led [label="적/황 LED\n(GPS 상태)\n← NEW" fillcolor="#FFE4B5"];
+        cool [label="능동 쿨링팬\n← NEW" fillcolor="#FFE4B5"];
+    }
+
+    battery -> bms;
+    bms -> dc19 -> jetson;
+    bms -> dc12 -> mcu;
+    bms -> dc5 -> lte;
+    bms -> dc5 -> buzz [style=dashed];
+    bms -> dc5 -> led [style=dashed];
+    bms -> dc12 -> cool [style=dashed];
+    bms -> motor [label="24V 직결\n(BLDC)" color=red];
+
+    estop -> relay [color=red penwidth=2];
+    estop -> mcu_en [color=red penwidth=2];
+    relay -> motor [label="cmd_vel 차단" color=red];
+    mcu_en -> mcu [label="EN low" color=red];
+
+    lte -> ntrip_remote [label="cellular"];
+    lte -> jetson [label="USB" style=dashed];
+    wifi -> jetson [style=dashed];
+
+    jetson -> mcu [label="UART /dev/myserial"];
+    mcu -> motor [label="PWM/PID"];
+    jetson -> buzz [label="GPIO" style=dashed];
+    jetson -> led [label="GPIO" style=dashed];
+
+    note [shape=note fillcolor="#FFFFE0" label=<
+        <B>채택 ✅</B><BR/>
+        <BR ALIGN="LEFT"/>• 22V LiPo 대용량
+        <BR ALIGN="LEFT"/>• 하드웨어 E-stop
+        <BR ALIGN="LEFT"/>• LTE/4G 모뎀
+        <BR ALIGN="LEFT"/>+ plan 추가:
+        <BR ALIGN="LEFT"/>• 능동 쿨링 / IP54
+        <BR ALIGN="LEFT"/>• 부저·LED 알람
+        <BR ALIGN="LEFT"/>• NVMe 로깅
+        <BR ALIGN="LEFT"/>
+    >];
+}

@@ -40,6 +40,7 @@ setup(
             'calibrate_linear = jupiter_bringup.calibrate_linear:main',
             'jupiter_driver = jupiter_bringup.jupiter_driver:main',
             'jupiter_driver_compensated = jupiter_bringup.jupiter_driver_compensated:main',
+            'wheel_deadzone_calibrator = jupiter_bringup.wheel_deadzone_calibrator:main',
             'jupiter_patrol = jupiter_bringup.jupiter_patrol:main',
             'rtcm_ublox_bridge = jupiter_bringup.rtcm_ublox_bridge:main',
             'gyro_pid_node = jupiter_bringup.gyro_pid_node:main',

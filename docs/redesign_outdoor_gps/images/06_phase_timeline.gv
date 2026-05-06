@@ -1,0 +1,29 @@
+digraph PhaseTimeline {
+    rankdir=LR;
+    bgcolor="white";
+    node [fontname="Noto Sans CJK KR" fontsize=11 style=filled shape=box];
+    edge [fontname="Noto Sans CJK KR" fontsize=10];
+    graph [fontname="Noto Sans CJK KR" fontsize=14 label="단계별 마이그레이션 타임라인" labelloc=t];
+
+    p0 [label="Phase 0\n(HW 1주)\n• F9P #2 마운트\n• moving-base 설정\n• /dev/rtk_gps_aux" fillcolor="#FFE4B5"];
+    p1 [label="Phase 1\n(SW 3일)\n• jupiter_gps_nav 패키지\n• outdoor launch 분기\n• frame 통일" fillcolor="#B0E0E6"];
+    p2 [label="Phase 2\n(SW 5일)\n• waypoint_follower 노드\n• /fromLL 호출\n• 4점 사각형 미션" fillcolor="#B0E0E6"];
+    p3 [label="Phase 3\n(SW 1주)\n• dual_rtk_heading\n• gps_quality_fsm\n• 커스텀 BT" fillcolor="#B0E0E6"];
+    p4 [label="Phase 4 (옵션)\n• mapviz 위성타일\n• GeoJSON 경로\n• nvblox 검토" fillcolor="#D3D3D3"];
+
+    p0 -> p1 -> p2 -> p3 -> p4;
+
+    chk0 [label="검증\nRELPOSNED\nbaseline 일치" shape=note fillcolor="#FFFFE0"];
+    chk1 [label="검증\nmode=outdoor\nEKF up" shape=note fillcolor="#FFFFE0"];
+    chk2 [label="검증\n/odometry/gps\n↔ global ±0.05m" shape=note fillcolor="#FFFFE0"];
+    chk3 [label="검증\nRTK 차폐 시\n정책별 거동" shape=note fillcolor="#FFFFE0"];
+    chk4 [label="검증\n위성지도 위\ntrajectory 정합" shape=note fillcolor="#FFFFE0"];
+
+    p0 -> chk0 [style=dashed];
+    p1 -> chk1 [style=dashed];
+    p2 -> chk2 [style=dashed];
+    p3 -> chk3 [style=dashed];
+    p4 -> chk4 [style=dashed];
+
+    {rank=same; chk0; chk1; chk2; chk3; chk4;}
+}

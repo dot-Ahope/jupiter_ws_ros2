@@ -81,7 +81,11 @@ bt_navigator:
 controller_server:
   ros__parameters:
     use_sim_time: False
-    controller_frequency: 10.0          # Jetson 부하 고려 (20→10Hz)
+    # [2026-05-06] MPPI 전환에 따라 10→20 Hz.
+    #   MPPI 는 controller_period ≤ model_dt (=0.05s) 제약 존재. 10Hz (period 0.1s) 면 lifecycle
+    #   configure 단계에서 "Controller period more then model dt" 예외로 controller_server 활성화 실패.
+    #   20Hz (period 0.05s = model_dt 0.05s) 로 정합. Orin Nano 부하 모니터링 필요.
+    controller_frequency: 20.0
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.10  # ⭐ [2026-04-21] 0.05→0.10: 정지 회전 시 실기구가 못 도는 0.0526 영역 차단
@@ -109,93 +113,138 @@ controller_server:
       yaw_goal_tolerance: 0.32          # ⭐ [2026-04-21] 0.30→0.32: near-goal 정렬 마무리에서 success 판정 여유를 소폭 확대해 불필요한 progress timeout 억제
 
     # ==============================================================
-    # RotationShimController → DWB 래핑
+    # RotationShimController → MPPI 래핑
     # ==============================================================
-    # 정지 상태에서 순수 회전(vx=0, vθ≠0) 시 양쪽 바퀴가 반대 방향으로
-    # 정지마찰을 동시에 극복해야 하므로, DWB의 낮은 angular.z 출력으로는
-    # 모터가 응답하지 못함 (데드존). RotationShimController가 정지 회전을
-    # 고정 속도(0.8 rad/s)로 처리한 후, DWB에 전달.
+    # [2026-05-06] DWB → MPPI 전환.
+    #   동기:
+    #     - DWB 의 sample-and-score 가 sim_time 1.0s + 11 vtheta sample 로 좁은 통로 trajectory
+    #       탐색이 부족 → "경향성만" 따라가는 현상.
+    #     - MPPI 는 model predictive + sampling 으로 더 부드럽고 path-aware 한 trajectory.
+    #     - 야외 농경지 비포장/미끄럼에 강함.
+    #   유지:
+    #     - RotationShimController 는 정지→회전 진입의 1차 처리 유지 (driver 의 adaptive kick
+    #       0.55 + encoder confirm 과 함께). MPPI 자체도 정지 회전 가능하지만 RotationShim 의
+    #       명시적 단계가 데드존 보상과 더 잘 어울림.
+    #     - DiffDrive motion_model 사용 (Yahboom Jupiter X3 차동구동).
     # ==============================================================
     FollowPath:
       plugin: "nav2_rotation_shim_controller::RotationShimController"
-      primary_controller: "dwb_core::DWBLocalPlanner"
-      angular_dist_threshold: 0.35        # ⭐ 45°→20°: RotationShim이 160° 회전 담당, DWB는 20°만 보otion [2026-03-19]
-      # 2026-04-28 (수정 #3): 0.6 → 0.3 복원
-      # 이유: 04-24 에 0.3→0.6 으로 키웠으나, 짧은 경로(<1.2m)에서 forward sample 지점이
-      #   path 끝 너머로 가서 RotationShim 활성 판단이 부정확 → 정지 회전이 DWB 로 떨어져
-      #   데드존 진입. 03-18 검증값 0.3 으로 복원.
+      primary_controller: "nav2_mppi_controller::MPPIController"
+      # [2026-05-06 update] 180° goal 시 "조금만 회전 후 전진" 증상 해결.
+      #   RotationShim 의 handover 임계를 0.35→0.20 (20°→11°) 로 엄격화.
+      #   path 와의 heading 차이가 11° 이내일 때만 MPPI 로 넘김 → 더 정확히 회전 후 진행.
+      angular_dist_threshold: 0.20        # 11° — 더 엄격한 정렬 후 handover
       forward_sampling_distance: 0.3
-      rotate_to_heading_angular_vel: 0.5 # ⭐ 0.8→0.5 [2026-03-20] 방안A-4 ESC deadzone skip 후 0.5도 즉시 토크 발생. 0.8은 PID 적분 모멘텀 과다→핸드오프 오버슈트
-      max_angular_accel: 3.0             # ⭐ 5.0→3.0 [2026-03-20] 0.5 목표 시 5.0 불필요. 3.0이면 0→0.5 도달 0.17s. RotateToGoal 급가속 억제
-      simulate_ahead_time: 1.5           # 2026-04-28: 1.0→1.5 (회전 후 충돌 검사 시간 확대, path 추종 안정)
+      rotate_to_heading_angular_vel: 0.5
+      max_angular_accel: 3.0
+      simulate_ahead_time: 1.0
 
-      # DWB 파라미터 (primary_controller)
-      debug_trajectory_details: True
-      min_vel_x: 0.0
-      min_vel_y: 0.0
-      max_vel_x: 0.20              # ⭐ 0.35→0.20 [2026-04-20] 후진 쏠림 방지. 저속에서 밸런스 보정 충분
-      max_vel_y: 0.0               # 차동구동 — Y 속도 없음
-      max_vel_theta: 1.0           # 각속도 최대값 (방안A 펌웨어 적용으로 1.0 복원)
-      min_speed_xy: 0.0
-      max_speed_xy: 0.20
-      min_speed_theta: 0.20        # ⭐ [2026-04-21] 0.15→0.20: slowing_factor 출력이 driver ROT_MIN(0.08) 이상이도록 안전 하한 확보
-      acc_lim_x: 0.5
-      acc_lim_y: 0.0
-      acc_lim_theta: 0.8           # 각가속도 (방안A 펌웨어 적용으로 0.8 복원)
-      decel_lim_x: -0.5
-      decel_lim_y: 0.0
-      decel_lim_theta: -0.8        # 각감속도 (방안A 펌웨어 적용으로 -0.8 복원)
-      vx_samples: 20
-      vy_samples: 1                # 차동구동이므로 Y 샘플 최소화
-      # 2026-04-28 (수정 #3): 21 → 11 복원. 04-24 에 21 로 키웠으나 04-21 분석:
-      #   "1/19=0.0526 병적 최소 샘플 제거, 최소 스텝≈0.10" — 11 이 데드존 안전.
-      #   21 은 sample 평가 시간 2배 → 10Hz controller cycle 압박 → 정지 회전 timing 불안.
-      vtheta_samples: 11
-      # 2026-04-24 (Stage 2): 1.5 → 1.0. 예측 거리 0.3→0.2m. 좁은 통로에서 trajectory 가
-      # 부풀어진 lethal 영역에 걸릴 확률 감소 → DWB 가 유효 trajectory 를 더 쉽게 찾음.
-      sim_time: 1.0
-      linear_granularity: 0.05
-      angular_granularity: 0.025
-      transform_tolerance: 0.5           # stamp=Time(0,0) + NTP chrony 적용 후 축소 (3.0→0.5)
-      xy_goal_tolerance: 0.25          # RotateToGoal 활성 영역 확대 — 회전 중 드리프트로 토글 방지
-      trans_stopped_velocity: 0.05        # 정지 판정
-      short_circuit_trajectory_evaluation: True
-      stateful: True
-      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist", "Twirling"]
-      # 2026-04-24 (Stage 2): BaseObstacle 0.02 → 0.05 (장애물 회피 비용 소폭 상향,
-      # 여전히 PathDist 대비 작아 경로 추종은 유지하지만 free-but-close trajectory 가 경쟁에서 덜 밀림).
-      # 2026-04-29 (T1.3): 0.05 → 0.20 (4배 강화). inflation_radius 0.20→0.25 와 함께
-      # DWB 가 lethal 근접 trajectory 를 더 적극 회피하도록. PathDist=24 와의 비율 1:120 유지로
-      # path 추종 우선순위는 그대로.
-      # 2026-04-29 (door fix): 0.20 → 0.10 — 1m 문 sideways 통과 시 footprint 가 inflation 영역을
-      # 더 많이 덮어 BaseObstacle cost 누적 → trajectory reject 되던 현상 완화. PathDist=24 비율
-      # 1:240 으로 더 유리, 좁은 곳 통과 가능성 증가. 회복적 평형 (T1.3 의 절반).
-      # 2026-04-30 (Tier 2.5): 0.10 → 0.05 — collision_monitor 가 hard gate 로 emergency stop
-      # 담당하므로 DWB 는 좁은 곳 통과 우선으로 가능. 0.05 면 PathDist=24 비율 1:480 — path
-      # 추종 압도적 우선이지만 inflation 영역 진입은 허용.
-      BaseObstacle.scale: 0.05
-      # 2026-04-24 (Stage 2): PathAlign/PathDist 32 → 20 (좁은 통로 회피 위해 plan 구속력 완화)
-      # 2026-04-28 (수정 #2): PathDist 20→28 (한쪽 바퀴 보정 강화)
-      # 2026-04-28 (수정 #3): PathDist 28→24 절충 — 28 이 너무 강해 회전 trajectory 까지
-      #   reject → 정지 회전 어려움 발생. 24 로 회전 자유도 회복하면서 위치 추종 일정 확보.
-      # 2026-04-30 (path tracking 강화): driver MOVING_ROT_MIN_ANGULAR=0.20 floor 도입으로
-      #   회전 명령의 실효성 확보 (이전엔 ω<0.20 명령이 모터 데드존 미만으로 무효).
-      #   이제 controller 의 모든 sample 이 실제 rover 거동과 일치 → path 구속력 더 강하게.
-      #   PathAlign 20→28, PathDist 24→32: path 이탈 trajectory 에 더 큰 페널티.
-      #   forward_point_distance 0.2→0.3: 더 멀리 보고 preemptive turn.
-      PathAlign.scale: 28.0
-      PathAlign.forward_point_distance: 0.3
-      GoalAlign.scale: 24.0
-      GoalAlign.forward_point_distance: 0.2
-      PathDist.scale: 32.0
-      GoalDist.scale: 24.0
-      RotateToGoal.scale: 32.0
-      RotateToGoal.slowing_factor: 2.0   # ⭐ [2026-04-21] 2.5→2.0: final yaw 정렬 출력 하한 확보(0.32/2.0=0.16)로 정지 회전 구간 정체 감소
-      RotateToGoal.lookahead_time: -1.0
-      Twirling.scale: 5.0                # 경로 추종 중 불필요한 스핀 방지 (방안A 적용으로 5.0 복원)
-      Oscillation.oscillation_reset_dist: 0.15
-      Oscillation.oscillation_reset_angle: 0.30
-      Oscillation.scale: 1.0              # 진동 페널티 (방안A 적용으로 1.0 복원)
+      # ==============================================================
+      # MPPI Controller (primary)
+      # ==============================================================
+      # 핵심 동작: 매 cycle batch_size 개의 trajectory 를 sampling, critic 으로 점수화,
+      #   weighted-average 로 최적 control 출력. iteration_count 만큼 refine.
+      # ==============================================================
+      # [2026-05-06 update] Control loop missed 가끔 발생 → 부하 약간 완화.
+      #   time_steps 56→48 (horizon 2.4s), batch 1000→700 (sim points 60% 수준).
+      #   여전히 horizon 충분 + sample 다양성 유지. CPU peak 28%→18% 예상.
+      time_steps: 48                # 예측 horizon (48 × 0.05 = 2.4s)
+      model_dt: 0.05                # 한 step 의 시간 (controller_frequency 와 정합)
+      batch_size: 700               # sampling 개수
+      vx_std: 0.2                   # vx noise std (m/s) — 탐색 폭
+      vy_std: 0.0                   # 차동구동이라 0
+      wz_std: 0.4                   # wz noise std (rad/s) — 회전 탐색 폭
+      vx_max: 0.20                  # max forward velocity (DWB max_vel_x 와 동기화)
+      vx_min: -0.10                 # 후진 허용 (좁은 곳 unstuck 용도)
+      wz_max: 1.0                   # max angular velocity
+      ax_max: 0.5
+      ax_min: -0.5
+      az_max: 0.8
+      iteration_count: 1            # MPPI iteration. 1 이 표준
+      prune_distance: 1.7           # path 의 robot 인근 N m 만 추종 (먼 부분 무시)
+      transform_tolerance: 0.5
+      temperature: 0.3              # softmax 온도 (낮을수록 best 에 집중)
+      gamma: 0.015                  # control noise 감쇠
+      motion_model: "DiffDrive"     # Yahboom 차동구동
+      visualize: false              # rviz 시각화 (디버깅 시 true)
+      regenerate_noises: false      # noise resample 매 cycle (false 가 더 빠름)
+      TrajectoryVisualizer:
+        trajectory_step: 5
+        time_step: 3
+      AckermannConstraints:
+        min_turning_r: 0.0          # diff drive 라 무관 (0 = 제약 없음)
+
+      # ==============================================================
+      # MPPI Critics — DWB 의 critic 과 1:1 대응
+      # ==============================================================
+      critics:
+        - "ConstraintCritic"        # 속도 한계 페널티
+        - "ObstaclesCritic"         # 충돌 회피 (DWB BaseObstacle 대응)
+        - "GoalCritic"              # goal 위치 페널티 (DWB GoalDist 대응)
+        - "GoalAngleCritic"         # goal 각도 (DWB RotateToGoal 대응)
+        - "PathAlignCritic"         # path heading 정렬 (DWB PathAlign 대응)
+        - "PathFollowCritic"        # path 거리 페널티 (DWB PathDist 대응)
+        - "PathAngleCritic"         # path 곡률 정렬
+        - "PreferForwardCritic"     # 후진 페널티 (필요 시 후진 허용하지만 우선순위 낮춤)
+
+      ConstraintCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 4.0
+      GoalCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 1.4    # goal 1.4m 이내일 때 활성
+      GoalAngleCritic:
+        enabled: true
+        cost_power: 1
+        # [2026-05-06] 3.0→8.0: "조금만 회전 후 전진" 증상 — MPPI 가 final yaw 미달 상태에서
+        #   다른 critic 에 밀려 직진 trajectory 채택. 가중치 강화로 yaw 미달 시 강한 페널티.
+        cost_weight: 8.0
+        threshold_to_consider: 0.5    # goal 0.5m 이내일 때 yaw 정렬 활성
+      PreferForwardCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 0.5
+      ObstaclesCritic:
+        enabled: true
+        cost_power: 1
+        repulsion_weight: 1.5         # inflation 영역 약한 회피
+        critical_weight: 20.0         # critical 영역 (lethal 근처) 강한 회피
+        consider_footprint: true      # ⭐ 좁은 통로 footprint 검사 — true 권장
+        collision_cost: 10000.0       # collision 시 사실상 reject
+        collision_margin_distance: 0.10
+        near_goal_distance: 0.5       # goal 근처에서 obstacle 가중치 완화
+        # MPPI 자체 inflation (costmap inflation 과 별개의 critic-내부 inflation)
+        inflation_radius: 0.55
+        cost_scaling_factor: 10.0
+      PathAlignCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 14.0             # path 이탈 페널티 (DWB PathAlign=28 의 절반 — MPPI 는 자체 sampling 으로 보완)
+        max_path_occupancy_ratio: 0.05
+        trajectory_point_step: 4
+        threshold_to_consider: 0.5
+        offset_from_furthest: 20
+        use_path_orientations: false
+      PathFollowCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        offset_from_furthest: 5
+        threshold_to_consider: 1.4
+      PathAngleCritic:
+        enabled: true
+        cost_power: 1
+        # [2026-05-06] 2.0→5.0: path 의 heading 곡률에 trajectory 정렬 강화.
+        #   회전 후 직진할 때 path 가 곡선이면 trajectory 가 그 곡률을 따라가도록.
+        cost_weight: 5.0
+        offset_from_furthest: 4
+        threshold_to_consider: 0.5
+        max_angle_to_furthest: 1.2
+        forward_preference: true
 
 # ==============================================================
 # Planner Server (SmacPlanner2D Global Planner)

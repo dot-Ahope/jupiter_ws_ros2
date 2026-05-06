@@ -1,0 +1,39 @@
+digraph EKFFusion {
+    rankdir=LR;
+    bgcolor="white";
+    node [fontname="Noto Sans CJK KR" fontsize=11 style=filled shape=box];
+    edge [fontname="Noto Sans CJK KR" fontsize=10];
+    graph [fontname="Noto Sans CJK KR" fontsize=14 label="EKF 센서 융합 (Global, map→odom)" labelloc=t];
+
+    subgraph cluster_inputs {
+        label="입력 센서"; style=filled; fillcolor="#F0F8FF"; fontsize=12;
+        kiss [label="/kiss/odometry\n(LiDAR)" fillcolor="#B0E0E6"];
+        wheel [label="/odom_adapted\n(휠 인코더)" fillcolor="#B0E0E6"];
+        imu0 [label="/imu/data_calibrated\n(MCU IMU)" fillcolor="#B0E0E6"];
+        imu1 [label="/heading\n(dual-RTK)" fillcolor="#FFE4B5" color=red penwidth=2];
+        gps [label="/odometry/gps\n(navsat_transform)" fillcolor="#B0E0E6"];
+    }
+
+    ekf [label="ekf_filter_node\n(robot_localization)\n50 Hz, 2D mode" fillcolor="#90EE90" shape=ellipse fontsize=13];
+    out [label="/odometry/global\n+ map→odom TF" fillcolor="#FFD700" shape=ellipse];
+
+    fsm [label="gps_quality_fsm\n(cov 동적 조정)" fillcolor="#FFE4B5" color=red penwidth=2 shape=note];
+
+    kiss -> ekf [label="x, y, yaw" color=blue];
+    wheel -> ekf [label="vx, vyaw\n(농경지 process_noise×3)" color=blue];
+    imu0 -> ekf [label="vyaw" color=blue];
+    imu1 -> ekf [label="yaw (절대)" color=red penwidth=2];
+    gps -> ekf [label="x, y" color=blue];
+    fsm -> gps [label="cov ×1/×3/×10/disable" style=dashed color=purple];
+
+    ekf -> out;
+
+    note [shape=note fillcolor="#FFFFE0" label=<
+        <B>핵심 변경점</B><BR/>
+        <BR ALIGN="LEFT"/>1. /heading 추가 (정지 yaw 확보)
+        <BR ALIGN="LEFT"/>2. wheel vx 공분산 ×3 (미끄럼)
+        <BR ALIGN="LEFT"/>3. GPS cov 동적 조정
+        <BR ALIGN="LEFT"/>4. magnetic_declination = -0.15
+        <BR ALIGN="LEFT"/>
+    >];
+}

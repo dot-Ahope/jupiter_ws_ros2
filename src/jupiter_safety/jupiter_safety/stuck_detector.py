@@ -37,10 +37,16 @@ from sensor_msgs.msg import Imu
 from std_msgs.msg import Bool
 
 
-# Stall detection thresholds
+# Stall detection thresholds (linear)
 STALL_CMD_MIN = 0.05         # |cmd.linear.x| 가 이 값 이상이어야 stall 후보
 STALL_ACTUAL_MAX = 0.02      # |actual.linear.x| 가 이 값 이하면 모터 안 도는 것
 STALL_DURATION = 1.5         # [s] 위 조건이 이 시간 동안 지속되면 stall
+
+# [2026-05-06] Angular stall — pure rotation 명령인데 collision_monitor 차단으로
+# 실제 안 도는 deadlock 검출. nav2 의 회전 goal (linear=0, angular=X) 시 linear stall 검사로는
+# 못 잡음. 회전 명령 + 실제 미회전 sustained 면 angular stall 로 판정.
+ANGULAR_STALL_CMD_MIN = 0.10    # |cmd.angular.z| 가 이 값 이상이어야 angular stall 후보
+ANGULAR_STALL_ACTUAL_MAX = 0.05 # |actual.angular.z| 가 이 값 이하면 회전 안 됨
 
 # Collision spike thresholds
 COLLISION_ACCEL_THRESH = -2.0   # [m/s²] linear_acceleration.x 가 이 값 이하 (negative spike)
@@ -103,10 +109,24 @@ class StuckDetector(Node):
         dt = now - self._last_tick
         self._last_tick = now
 
-        # 2A — Stall detection
+        # 2A — Stall detection (linear OR angular)
         cmd_abs = abs(self._cmd_x)
         actual_abs = abs(self._actual_x)
-        stall_condition = (cmd_abs > STALL_CMD_MIN) and (actual_abs < STALL_ACTUAL_MAX)
+        cmd_z_abs = abs(self._cmd_z)
+        actual_z_abs = abs(self._actual_z)
+
+        # Linear stall: linear 명령 + 실제 미동
+        linear_stall = (cmd_abs > STALL_CMD_MIN) and (actual_abs < STALL_ACTUAL_MAX)
+
+        # Angular stall: pure rotation 명령 + 실제 미회전 (linear 명령 없을 때만 검사,
+        # arc 주행 중 일시적 angular drop 을 stall 로 오판하지 않도록).
+        angular_stall = (
+            cmd_abs <= STALL_CMD_MIN and
+            cmd_z_abs > ANGULAR_STALL_CMD_MIN and
+            actual_z_abs < ANGULAR_STALL_ACTUAL_MAX
+        )
+
+        stall_condition = linear_stall or angular_stall
 
         if stall_condition:
             self._stall_accum += dt
@@ -128,8 +148,11 @@ class StuckDetector(Node):
         if stalled or collision_spike:
             self._stuck_until = now + STUCK_LATCH_DURATION
             if stalled and self._stall_accum < STALL_DURATION + dt:  # 첫 trigger 만 로그
+                stall_type = "angular" if angular_stall and not linear_stall else "linear"
                 self.get_logger().warn(
-                    f"STUCK detected (stall): cmd_x={self._cmd_x:+.3f}, actual_x={self._actual_x:+.3f}, "
+                    f"STUCK detected ({stall_type} stall): "
+                    f"cmd_x={self._cmd_x:+.3f}, actual_x={self._actual_x:+.3f}, "
+                    f"cmd_z={self._cmd_z:+.3f}, actual_z={self._actual_z:+.3f}, "
                     f"accum={self._stall_accum:.2f}s"
                 )
             if collision_spike:
