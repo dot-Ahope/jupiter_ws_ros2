@@ -34,8 +34,12 @@ collision_monitor:
 
     PolygonStop:
       type: "polygon"
-      # 전방 0.30m, 후방 -0.18m, 폭 ±0.18m
-      points: [0.30, 0.18, 0.30, -0.18, -0.18, -0.18, -0.18, 0.18]
+      # [2026-05-08] 0.30/0.18 → 0.25/0.14 축소.
+      # bag 분석으로 좁은 통로/회전 시 collision_monitor 가 normal navigation cmd 차단 (12.8%).
+      # footprint 0.36×0.245 의 외곽 1.5~3cm 까지만 polygon — 좁은 통로 통과율 향상.
+      # PolygonSlow (0.55/0.25) 가 충돌 직전 감속 역할 — 안전 margin 분담.
+      # 전방 0.25m, 후방 -0.14m, 폭 ±0.14m
+      points: [0.25, 0.14, 0.25, -0.14, -0.14, -0.14, -0.14, 0.14]
       action_type: "stop"
       min_points: 3
       visualize: True

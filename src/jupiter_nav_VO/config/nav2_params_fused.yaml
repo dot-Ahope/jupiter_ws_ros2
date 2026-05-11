@@ -133,7 +133,11 @@ controller_server:
       # [2026-05-06 update] 180° goal 시 "조금만 회전 후 전진" 증상 해결.
       #   RotationShim 의 handover 임계를 0.35→0.20 (20°→11°) 로 엄격화.
       #   path 와의 heading 차이가 11° 이내일 때만 MPPI 로 넘김 → 더 정확히 회전 후 진행.
-      angular_dist_threshold: 0.20        # 11° — 더 엄격한 정렬 후 handover
+      # [2026-05-11 Stage 3] 0.20 → 0.30. shim 영역 확장 (11°→17°).
+      #   bag 분석으로 cmd ω 작은 영역 (0.125) 에서 motor deadzone 미달 stall 확인 (10초 무응답).
+      #   shim 작동 시 rotate_to_heading_angular_vel=0.5 로 명령 → motor deadzone (0.30) 통과 가능.
+      #   yaw_goal_tolerance=0.32 (18.3°) 와 gap 도 7°→1.3° 로 좁혀 premature forward 차단.
+      angular_dist_threshold: 0.30        # 17° — shim 영역 확장 + premature forward 차단
       forward_sampling_distance: 0.3
       rotate_to_heading_angular_vel: 0.5
       max_angular_accel: 3.0
@@ -156,7 +160,10 @@ controller_server:
       wz_std: 0.4                   # wz noise std (rad/s) — 회전 탐색 폭
       vx_max: 0.20                  # max forward velocity (DWB max_vel_x 와 동기화)
       vx_min: -0.10                 # 후진 허용 (좁은 곳 unstuck 용도)
-      wz_max: 1.0                   # max angular velocity
+      # [2026-05-11 Stage 4] 1.0 → 0.6. Premature forward 분석으로 cmd ω=±1.000 (panic max)
+      # 직접 발생 → over-correction oscillation. wz_max clamp 으로 panic 영역 자체 차단.
+      # 정상 회전 영역 (0.5 rad/s) 은 유지. trade-off: 빠른 회피 능력 약간 저하.
+      wz_max: 0.6                   # max angular velocity
       ax_max: 0.5
       ax_min: -0.5
       az_max: 0.8
@@ -206,15 +213,22 @@ controller_server:
       PreferForwardCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 5.0
+        # [2026-05-11 Stage 3] 5.0 → 3.0. forward 우선도 약화. yaw 미달 상태에서 forward
+        # trajectory 채택 빈도 감소 → premature forward (회전 미완료 전 전진) 차단 보강.
+        cost_weight: 3.0
         threshold_to_consider: 0.5
       ObstaclesCritic:
         enabled: true
         cost_power: 1
         repulsion_weight: 1.5         # inflation 영역 약한 회피
-        critical_weight: 20.0         # critical 영역 (lethal 근처) 강한 회피
+        # [2026-05-08 v2] 20.0 → 15.0 → 18.0 부분 환원. 15.0 으로 낮추니 robot 이 path 무시하고
+        #   안쪽 cut → 코너 obstacle <25cm 비율 14.2%, max speed 0.20 으로 17.8cm 까지 접근.
+        #   18.0 으로 절충 — path wide 유지 (inflation 0.32) + obstacle 회피 강도 회복.
+        critical_weight: 18.0         # critical 영역 (lethal 근처) 회피
         consider_footprint: true      # ⭐ 좁은 통로 footprint 검사 — true 권장
         collision_cost: 10000.0       # collision 시 사실상 reject
+        # [2026-05-08 v2] 0.10 → 0.08 → 0.10 환원. margin 줄이니 trajectory rollout 시
+        #   obstacle 쪽으로 더 진입 가능 → cut 의 직접 원인. 0.10 으로 복구.
         collision_margin_distance: 0.10
         near_goal_distance: 0.5       # goal 근처에서 obstacle 가중치 완화
         # MPPI 자체 inflation (costmap inflation 과 별개의 critic-내부 inflation)
@@ -223,7 +237,10 @@ controller_server:
       PathAlignCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 14.0             # path 이탈 페널티 (DWB PathAlign=28 의 절반 — MPPI 는 자체 sampling 으로 보완)
+        # [2026-05-08 v2] 14.0 → 20.0. inflation 0.32 로 path 가 wide 해지자 robot 이 path 무시
+        #   하고 안쪽 cut (path↔obstacle 51.3cm vs robot↔obstacle 41.8cm, 9.5cm 차).
+        #   PathAlign 강화로 path 추종 우선순위 ↑.
+        cost_weight: 20.0             # path 이탈 페널티
         max_path_occupancy_ratio: 0.05
         trajectory_point_step: 4
         threshold_to_consider: 0.5
@@ -309,7 +326,9 @@ behavior_server:
     # 는 과도. 좁은 곳 stuck 시 simulate 가 충돌 예측 → backup cmd_vel = 0 → 10초 timeout 후
     # backup failed. 0.5초 × 0.10 m/s = 0.05m 후방 check 로 좁은 곳에서도 backup 가능.
     simulate_ahead_time: 0.5
-    max_rotational_vel: 0.8
+    # [2026-05-11 Stage 4 보강] 0.8 → 0.6. behavior_server 의 Spin/BackUp 도 동일 cap 으로
+    # 정렬 (smoother max_velocity z 와 동일). panic 회전 명령 차단.
+    max_rotational_vel: 0.6
     min_rotational_vel: 0.15
     rotational_acc_lim: 0.8
 
@@ -433,8 +452,14 @@ global_costmap:
         # 2026-04-28: local 과 동일하게 완화 (10→5, 0.30→0.20)
         # 2026-04-29 (T1.1, T1.2): local 과 동일 0.25 / 3.0 으로 유지 — global 과 local 의
         # cost gradient 가 다르면 SmacPlanner 가 그린 path 가 DWB 에서 reject 되는 mismatch 발생.
-        cost_scaling_factor: 3.0
-        inflation_radius: 0.25
+        # [2026-05-08] 0.25 → 0.32, 3.0 → 2.5. bag 분석으로 코너 path 5.6% 가 obstacle 의
+        # inflation (≤20cm) 안에 들어감 → MPPI 가 코너 진입 시 자체 감속. inflation +7cm 로
+        # SmacPlanner 가 obstacle 멀리 path 그리고, scaling 2.5 로 gradient 부드럽게.
+        # 좁은 통로 통과 능력: 1m 문 (footprint 0.245m) → 정중앙 lethal 까지 0.50m,
+        # inflation 0.32 + footprint side 0.1225 = 0.4425m < 0.50m → 통과 가능.
+        # local 은 0.20 유지 (footprint check 정확) — global path 가 멀리 그려져 local 진입 안전.
+        cost_scaling_factor: 2.5
+        inflation_radius: 0.32
 
 # ==============================================================
 # Velocity Smoother
@@ -448,10 +473,17 @@ velocity_smoother:
     smoothing_frequency: 20.0
     scale_velocities: false
     feedback: "OPEN_LOOP"
-    max_velocity: [0.20, 0.0, 1.0]       # ⭐ 0.35→0.20 [2026-04-20] DWB max_vel_x와 동기화
-    min_velocity: [-0.20, 0.0, -1.0]
-    max_accel: [0.5, 0.0, 2.5]           # ⭐ angular 0.8→2.5: ESC 데드존 구간 빠르게 통과 [2026-03-19]
-    max_decel: [-0.5, 0.0, -2.5]         # ⭐ angular -0.8→-2.5: 회전 정지 시 데드존 통과 최소화 [2026-03-19]
+    # [2026-05-11 Stage 4 보강] angular 1.0 → 0.6. Stage 4 의 wz_max=0.6 (MPPI 내부) 효과
+    # 미작동 확인 — bag 분석으로 cmd 1.000 발사 23.1%. smoother 가 publish 단 hard cap 이라
+    # 여기서 0.6 으로 진짜 clamp. premature forward 의 큰 actual_ω 잔류 (1.0+) 차단.
+    max_velocity: [0.20, 0.0, 0.6]
+    min_velocity: [-0.20, 0.0, -0.6]
+    # [2026-05-11 Stage 4] angular 2.5 → 1.5 (accel/decel 모두). OPEN_LOOP smoother 가
+    # 0.5초 안에 0→1.25 rad/s 도달 가능 → step input → motor inertia 누적 → over-rotation +
+    # decay 시간 642ms (max 2000ms). 1.5 로 낮춰 ramp 길어짐 → nav2 가 회전 충분히 판단 후
+    # 멈출 시간 확보. trade-off: 회전 시작 지연 +200ms.
+    max_accel: [0.5, 0.0, 1.5]           # angular 1.5: 부드러운 ω 변화 (이전 2.5)
+    max_decel: [-0.5, 0.0, -1.5]         # angular -1.5: 부드러운 brake
     odom_topic: "odom"
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.05]  # ⭐ 0.20→0.05: 0.20은 DWB 헤딩보정(0.05~0.15) 차단→Goal1 TIMEOUT. 노이즈만 필터링 [2026-03-19]

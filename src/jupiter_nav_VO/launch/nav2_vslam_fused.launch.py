@@ -55,7 +55,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction, ExecuteProcess
-from launch.substitutions import LaunchConfiguration, Command
+from launch.substitutions import LaunchConfiguration, Command, PythonExpression
 from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
@@ -100,6 +100,18 @@ def generate_launch_description():
         'use_gnss', default_value='true',
         description='Enable RTK GPS fusion (ZED-F9P). '
                     'Disable for indoor-only testing without GPS hardware.'
+    )
+
+    # [2026-05-07] SLAM 모드 분기 — mapping (지도 생성) / localization (저장 지도 사용).
+    # localization 모드는 별도 executable (localization_slam_toolbox_node) 사용.
+    # sync_slam_toolbox_node 의 mode:=localization 은 lifelong mapping 동작 — 새 obstacle 시 map 추가.
+    slam_mode_arg = DeclareLaunchArgument(
+        'slam_mode', default_value='mapping',
+        description='slam_toolbox mode — "mapping" (sync_slam_toolbox_node) 또는 "localization" (localization_slam_toolbox_node)'
+    )
+    slam_map_arg = DeclareLaunchArgument(
+        'slam_map', default_value='',
+        description='localization 모드 시 사전 저장된 지도 경로 (확장자 제외). mapping 모드에선 무시.'
     )
     
     # ============================================================
@@ -529,6 +541,9 @@ def generate_launch_description():
         "/local_costmap/costmap_updates",
         "/global_costmap/costmap_updates",
         "/controller_server/transition_event",
+        "/collision_monitor_state",   # [2026-05-08] PolygonStop/Slow trip 진단용
+        "/polygon_stop",              # PolygonStop visualization (rviz overlay 용도)
+        "/polygon_slow",
     ])
     BAG_OUTPUT = "/home/jetson/bags/latest"
     bag_recorder = TimerAction(
@@ -554,7 +569,17 @@ def generate_launch_description():
     # 5초 지연: IMU 캘리브 + EKF 초기화 후 시작 (scan_merger 보다 1초 뒤)
     slam_params_file = os.path.join(pkg_jupiter_nav, 'config', 'slam_params.yaml')
 
-    slam_toolbox_node = Node(
+    # [2026-05-07] slam_mode 별 다른 executable 사용:
+    #   - mapping:      sync_slam_toolbox_node — 새 지도 생성/lifelong 갱신
+    #   - localization: localization_slam_toolbox_node — pure localization, map 수정 안 함
+    # sync_slam_toolbox_node 의 mode:=localization 은 사용자 보고처럼 lifelong mapping 동작 →
+    # 저장 지도 위에 새 obstacle 그림. 진짜 localization 은 별도 executable.
+
+    slam_is_mapping = PythonExpression(["'", LaunchConfiguration('slam_mode'), "' == 'mapping'"])
+    slam_is_localization = PythonExpression(["'", LaunchConfiguration('slam_mode'), "' == 'localization'"])
+
+    slam_toolbox_mapping_node = Node(
+        condition=IfCondition(slam_is_mapping),
         package='slam_toolbox',
         executable='sync_slam_toolbox_node',
         name='slam_toolbox',
@@ -562,9 +587,25 @@ def generate_launch_description():
         output='screen'
     )
 
+    slam_toolbox_localization_node = Node(
+        condition=IfCondition(slam_is_localization),
+        package='slam_toolbox',
+        executable='localization_slam_toolbox_node',
+        name='slam_toolbox',
+        parameters=[
+            slam_params_file,
+            {
+                'mode': 'localization',
+                'map_file_name': LaunchConfiguration('slam_map'),
+                'map_start_at_dock': False,
+            },
+        ],
+        output='screen'
+    )
+
     delayed_slam_toolbox = TimerAction(
         period=5.0,
-        actions=[slam_toolbox_node]
+        actions=[slam_toolbox_mapping_node, slam_toolbox_localization_node]
     )
 
     # ============================================================
@@ -684,7 +725,9 @@ def generate_launch_description():
         use_rviz_arg,
         lidar_port_arg,
         use_gnss_arg,
-        
+        slam_mode_arg,
+        slam_map_arg,
+
         # 1. Robot Description
         robot_state_publisher,
         joint_state_publisher,

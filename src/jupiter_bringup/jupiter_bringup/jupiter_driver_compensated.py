@@ -27,7 +27,12 @@ class JupiterDriver(Node):
     # 방안A-4 후 ESC 매핑 변경 → MCU 게인 2.83→2.49 (Part2: 0.5rad/s×3s=85.9° 예상, 75.59° 실측)
     # 보정: 0.353 × (85.9/75.59) = 0.401
     # ANGULAR_SCALE_FACTOR = 0.401  # 방안A-4 기준 재캘리브레이션
-    ANGULAR_SCALE_FACTOR = 1.0  # 모터 교체 → 보정 없이 1:1 전달
+    # ANGULAR_SCALE_FACTOR = 1.0    # [2026-04-17] 모터 교체 → 1:1 (재캘리브 필요 명시)
+    # [2026-05-11 Stage 8] 1.0 → 0.93. calibrate_angular.py 측정 (cmd ω=0.5 rad/s, 5 cycles
+    # 평균 11.64s/360° → ratio 1.079 — robot 이 cmd 보다 8% 더 회전). 명령을 0.93× 로 보내
+    # 의도대로 회전. publish_velocity 의 vz_scaled = vz / SCALE 도 자동 정합.
+    # 주의: CCW 만 측정 — CW 비대칭 가능. 양방향 측정으로 추후 재조정 권장.
+    ANGULAR_SCALE_FACTOR = 0.93     # 회전 명령 보정 — robot 이 cmd 의 1.079× 응답
 
     # 방안C: MCU 엔코더 분해능 한계 보정 (정지 회전 시 최소 각속도)
     # 엔코더: 1320 pulse/rev, 10ms 측정주기 → 1 tick = 16.3 mm/s
@@ -52,17 +57,46 @@ class JupiterDriver(Node):
     # [2026-04-30 update] 정지 회전 키크 강화 + adaptive 종료 (encoder 기반)
     # 이전 (시간 기반 0.12s): MCU PID 적분이 deadzone 까지 올라오기 전 kick 종료 → 무회전 지속.
     # 현재: kick 강도 0.55 로 상향 + 최대 0.40s 지속, 단 actual ω 가 CONFIRM 임계 도달 시 즉시 전환.
-    MCU_ROT_START_ANGULAR = 0.55     # 정지마찰 극복용 기동 각속도 (0.37→0.55, MCU PID/FF 한계 우회)
+    # [2026-05-08] 0.55 → 0.30. bag 분석으로 짧은 회전 phase (0.15s) 직후 actual ω 잔류
+    # 6.4x 까지 (cmd=-0.113 → actual=-0.721) over-rotation 관찰. kick 0.55 이 모터에 강한
+    # inertia 부여 → kick 종료 후에도 0.5~0.7 rad/s 잔류 회전 → nav2 의 작은 ω 명령 무시.
+    # 새 모터 + deadzone 환원 (700/700) 환경에서 0.30 으로도 정지마찰 극복 가능 가설.
+    # 위험: 정지마찰 못 극복 시 회전 시작 안 됨 — stall. 발생 시 0.40 으로 단계적 상향.
+    MCU_ROT_START_ANGULAR = 0.30     # [2026-05-08] 0.55 → 0.30. inertia 감소 — over-rotation 차단
     # [2026-05-06] 0.12 → 0.30. bag 분석으로 좌회전 명령 cmd_z 평균 0.204 rad/s 시 wheel-level
     # diff = 0.025 m/s = 1.5 tick (16.3 mm/s/tick) 으로 모터 deadzone 미달 → 68.8% 정지 확인.
     # 0.30 으로 boost 하면 wheel-level diff = 0.037 m/s = 2.3 tick → 통과 가능.
     # 부작용: MPPI 의 trajectory rollout 예측 (작은 ω) 과 실제 거동 (0.30) 불일치 → 진동 가능.
     # 임시 해결책. 근본은 펌웨어 양방향 deadzone 캘리브레이션 (옵션 B).
-    ROT_RUNNING_MIN_ANGULAR = 0.30   # 정지 회전 RUNNING 단계 floor
+    #
+    # [2026-05-08] 0.30 → 0.0 (DISABLED). bag 분석으로 cmd ω ∈ [0.04, 0.30] 표본 55개에서
+    # actual/cmd ratio 평균 2.14x (최대 8x: cmd=-0.052, actual=-0.420). 회전→전진 전환 시
+    # nav2 의 ramping ω (0.250→0.125→0.116) 에 actual 이 -0.541 → -0.481 → -0.120 으로
+    # over-rotation. 사용자 가설 (정지 회전 floor 가 nav2 와 충돌) 검증됨.
+    # MCU_ROT_START_ANGULAR=0.55 의 startup kick 만으로 정지마찰 극복 후, RUNNING 단계는
+    # nav2 명령 그대로 통과 (max(raw, 0.0) = raw 패스스루).
+    # 위험: kick 종료 후 작은 ω 명령에 모터 deadzone 미달로 stall 가능 (0.12 시절 문제).
+    #       단 startup kick 의 adaptive 종료 (encoder confirm) 가 작동 중이라 motion 확인된
+    #       상태에서 RUNNING 진입 → deadzone 통과 가능성 ↑. 만약 stall 자주 발생하면
+    #       0.10 ~ 0.15 정도로 작은 floor 재도입.
+    # [2026-05-11 Stage 5 우선 적용] 0.0 → 0.20. Stage 1+2 검증으로 핵심 문제 = RUNNING 단계
+    # cmd 0.125~0.20 영역의 motor deadzone 미달 stall 확인 (8~12s 무응답).
+    # [2026-05-11 update 2] 0.20 → 0.30. Stage 3 검증으로 cmd 0.150 영역 5회 stall (총 17.7s)
+    # 잔존 확인. 0.20 boost 도 motor deadzone 미달. bag 데이터: cmd 0.30 부터 motor 정상 응답.
+    # 0.30 으로 boost 하면 nav2 작은 cmd (0.04~0.30) 모두 motor deadzone 확실 통과.
+    # trade-off: over-rotation 추가 악화 가능 — Stage 4 (wz_max clamp) 또는 Stage 6
+    # (sign-flip 0 cycle) 으로 흡수 예정.
+    ROT_RUNNING_MIN_ANGULAR = 0.30   # RUNNING 단계 floor — motor deadzone 확실 통과
     ROT_MIN_REQUEST_ANGULAR = 0.04   # 이 이상이어야 회전 시작 (smoother deadband 0.05보다 낮아 안전)
     ROT_RELEASE_ANGULAR = 0.03       # 이 미만이면 회전 종료 (노이즈 구간)
-    ROT_STARTUP_KICK_SEC = 0.40      # 기동 키크 최대 지속 시간 (0.12→0.40, encoder 확인 전 안전 상한)
-    ROT_KICK_CONFIRM_THRESHOLD = 0.10  # |actual_z| 가 이 값 이상이면 motion 확인 → kick 조기 종료
+    # [2026-05-11 Stage 2 REVERTED] 0.25 → 0.40 환원. Stage 2 검증으로 motion 안 시작 폭증
+    # (0/10 → 13/19 = 68%) + stuck_status True 전환 10회 발생. 0.25s 안에 RUNNING 진입 시
+    # cmd 그대로 통과 → deadzone 미달 stall. 0.40s 유지로 kick 시간 보장.
+    ROT_STARTUP_KICK_SEC = 0.40      # 기동 키크 최대 지속 시간 (encoder 확인 전 안전 상한)
+    # [2026-05-11 Stage 1] 0.10 → 0.06. bsp_motor filter α (0.3) 의 응답 지연으로 actual_z 가
+    # 0.10 까지 도달하기 100ms 이상 → kick 0.40s 끝까지 유지 → PID 적분 누적 → over-rotation.
+    # 0.06 으로 낮추면 100~150ms 안에 confirm → kick 즉시 종료 → RUNNING 패스스루 진입.
+    ROT_KICK_CONFIRM_THRESHOLD = 0.06  # |actual_z| 가 이 값 이상이면 motion 확인 → kick 조기 종료
     ROT_SIGN_HOLD_SEC = 0.25         # 부호 전환 금지 시간
 
     # [2026-04-30] 이동 + 회전 데드존 보상
@@ -125,7 +159,11 @@ class JupiterDriver(Node):
         # Ki: 0.06→0.02 [2026-03-19] 방안A-4 ESC 스킵 후 적분 불필요하게 큼
         # 높은 Ki → incremental PID 누적 출력 과다 → 방향전환 시 ~2초 지연 → 오버슈트→헌팅
         # 0.02: 적분 누적 3x 감소 → 방향전환 ~0.7초
-        self.declare_parameter('Ki', 0.02,
+        # [2026-05-11] 0.02 → 0.06 환원. 방안A-4 는 CAR_DIFFERENTIAL 만 적용 (bsp_motor.c:41
+        # 분기), 현재 CAR_MECANUM 사용 중이라 방안A-4 가정 무관. bag 분석으로 cmd vx 0.2 → actual
+        # 5초 ramp-up 확인 → progress_checker 못 미달 → BT Spin recovery 잘못 trigger.
+        # Ki=0.06 이 정상상태 오차 누적 빠르게 → 응답 1초 이내 도달 → progress 정상.
+        self.declare_parameter('Ki', 0.06,
             ParameterDescriptor(
                 type=ParameterType.PARAMETER_DOUBLE,
                 floating_point_range=[FloatingPointRange(
@@ -253,6 +291,10 @@ class JupiterDriver(Node):
         self._rot_sign_hold_until = 0.0
         self._rot_startup_until = 0.0    # 기동 키크 최대 종료 시각 (안전 상한)
         self._rot_motion_confirmed = False  # encoder 로 motion 확인됐는지
+
+        # [2026-05-11 Stage 6] sign-flip 0 cycle 삽입용. 직전 angular 명령 기억.
+        # brake → 반대 방향 회전 transition 시 motor inertia 잔류 방지.
+        self._last_cmd_omega = 0.0
         
     def parameter_callback(self, params):
         """Handle parameter updates"""
@@ -416,7 +458,17 @@ class JupiterDriver(Node):
             # Save last command timestamp for odometry and timeout detection
             self.last_cmd_vel = msg
             self.last_cmd_time = self.get_clock().now()
-            
+
+            # [2026-05-11 Stage 6] Sign-flip 0 cycle 삽입 — motor inertia 배출
+            # 부호 뒤집힘 + 직전이 의미있는 회전 (|ω|>0.10) 이면 이번 cycle 0 송신.
+            # 다음 cycle 부터 angular_corrected 적용 → motor 가 inertia 배출 후 반대 방향 시작.
+            # premature forward 시 actual_ω 잔류 (0.5~1.0) 의 직접 원인 제거.
+            if self._last_cmd_omega * angular_corrected < 0 and abs(self._last_cmd_omega) > 0.10:
+                self.bot.set_car_motion(vx, vy, 0.0)
+                self._last_cmd_omega = 0.0
+                return
+            self._last_cmd_omega = angular_corrected
+
             # Send velocity command to MCU with corrected angular velocity
             # MCU's PID controller will handle all low-level control:
             # - Converts velocity → target encoder counts

@@ -24,7 +24,11 @@ slam_toolbox:
 
     debug_logging: false
     throttle_scans: 4              # 2 -> 4 (부하 감소 및 데이터 드롭)
-    transform_publish_period: 0.1  # ⭐ TF 발행 주기 (0.05->0.1, 10Hz) - CPU 부하 감소
+    # [2026-05-11] 0.1 → 0.05 시도 후 CPU 과부하 발생 (BT tick 100Hz 못 따라감,
+    #   action server timeout, control loop missed 48회) → 환원.
+    #   TF lookup abort (12회) 는 옵션 B (controller 10Hz + model_dt 0.1 + time_steps 24)
+    #   같이 적용해야 안전. 우선 0.1 환원으로 CPU 부하 해소.
+    transform_publish_period: 0.1   # TF 발행 주기 (10Hz, CPU 부하 감소)
     map_update_interval: 5.0       # ⭐ 맵 업데이트 주기 (2.0->5.0) - CPU 부하 감소
     resolution: 0.05               # 맵 해상도
     max_laser_range: 5.0           # 2026-04-24: 4.0 → 5.0 (D455 depth 유효 범위 반영)
@@ -38,7 +42,7 @@ slam_toolbox:
     use_scan_matching: true
     use_scan_barycenter: true
     minimum_travel_distance: 0.1   # ⭐ 최소 이동 거리 (0.05→0.1, 10cm) - 업데이트 빈도 감소
-    minimum_travel_heading: 0.05   # ⭐ 최소 회전 각도 (0.03→0.05, 약 2.9도) - 업데이트 빈도 감소
+    minimum_travel_heading: 0.20   # [2026-05-08] 0.05 → 0.20 (약 11.5°). yaw drift 누적 차단 — 작은 회전마다 매칭 시도하지 않음
     scan_buffer_size: 100          # ⭐ 버퍼 크기 대폭 증가 (50→100) - 메시지 드롭 완전 방지
     scan_buffer_maximum_scan_distance: 4.0  # 최대 스캔 거리 확대 (3.5→4.0) ⭐
     
@@ -46,22 +50,22 @@ slam_toolbox:
     # 실시간 스캔 매칭 (적당히 엄격) ⭐
     # 목적: 오도메트리 보조, 급격한 변화 방지
     # ========================================
-    link_match_minimum_response_fine: 0.50  # 0.10 → 0.20 (엄격) - 잘못된 매칭 방지 ⭐⭐
+    link_match_minimum_response_fine: 0.65  # [2026-05-08] 0.50 → 0.65 (엄격). yaw jump 19.58° (idle) 사례로 매칭 임계 상향
     link_scan_maximum_distance: 1.5         # 2.5 → 1.5 (축소) - 인접 스캔만 매칭 ⭐⭐
     
     # ========================================
     # 루프 클로저 (매우 엄격하게) ⭐⭐⭐
     # 목적: 지도 중첩 방지, 높은 확신만 허용
     # ========================================
-    loop_search_maximum_distance: 4.0       # 4.0 → 4.0 (유지) - 가까운 위치만 루프 클로저 ⭐⭐
+    loop_search_maximum_distance: 2.5       # [2026-05-08] 4.0 → 2.5. 먼 거리 잘못된 loop closure 방지 — 가까운 위치만
     do_loop_closing: true
     loop_match_minimum_chain_size: 15       # 10 → 15 (매우 엄격) - 더 많은 증거 요구 ⭐⭐⭐
     loop_match_maximum_variance_coarse: 1.5 # 2.0 → 1.5 (엄격) - 분산 제한 강화 ⭐⭐
-    loop_match_minimum_response_coarse: 0.55 # 0.45 → 0.55 (매우 엄격) - 응답값 기준 상향 ⭐⭐⭐
+    loop_match_minimum_response_coarse: 0.70 # [2026-05-08] 0.55 → 0.70 (strict). 약한 매칭으로 인한 yaw jump 차단
     loop_match_minimum_response_fine: 0.65   # 0.50 → 0.65 (매우 엄격) - 정밀 매칭 기준 강화 ⭐⭐⭐
 
     # Correlation Parameters - Correlation Parameters
-    correlation_search_space_dimension: 0.6 # 검색 공간 확장 (0.5→0.6)
+    correlation_search_space_dimension: 0.3 # [2026-05-08] 0.6 → 0.3. 검색 공간 축소 — 잘못된 매칭 후보 차단
     correlation_search_space_resolution: 0.01
     correlation_search_space_smear_deviation: 0.1
 

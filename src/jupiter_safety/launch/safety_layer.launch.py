@@ -70,14 +70,22 @@ def generate_launch_description():
     )
 
     # ============================================================
-    # forced_recovery (Tier 2C)
+    # forced_recovery (Tier 2C) — [2026-05-08] DISABLED
     # ============================================================
-    forced_recovery_node = Node(
-        package='jupiter_safety',
-        executable='forced_recovery',
-        name='forced_recovery',
-        output='screen',
-    )
+    # 비활성화 사유 (bag 분석 220s, 4건 force backup 모두 부적절):
+    #   #0,#1,#2 (3건): angular stall (회전 명령 응답 0) — backup 으로 해결 불가
+    #   #3 (1건): nav2 가 이미 BackUp behavior 진행 중 (-0.098 m/s) → 중복 force backup
+    #   → 4/4 inappropriate. nav2 BehaviorTree 의 BackUp/Spin 이 같은 일을 더 영리하게 처리.
+    # 재 활성화 조건:
+    #   · 유리/투명 표면 환경 진입 (LiDAR 통과 → nav2 free 라 판정 → motor stall 만 신호)
+    #   · 또는 ultrasonic ring 도입 (Tier 3) 과 함께 재설계
+    # stuck_detector + alert_publisher 는 유지 — 진단/모니터링 가치는 있음.
+    # forced_recovery_node = Node(
+    #     package='jupiter_safety',
+    #     executable='forced_recovery',
+    #     name='forced_recovery',
+    #     output='screen',
+    # )
 
     # ============================================================
     # alert_publisher (Tier 2D)
@@ -103,7 +111,7 @@ def generate_launch_description():
     return LaunchDescription([
         twist_mux_node,
         stuck_detector_node,
-        forced_recovery_node,
+        # forced_recovery_node,   # [2026-05-08] DISABLED — 위 코멘트 참조
         alert_publisher_node,
         collision_monitor_launch,
     ])
