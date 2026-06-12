@@ -33,8 +33,10 @@ def generate_launch_description():
         output='screen',
         parameters=[
             {'use_sim_time': use_sim_time},
-            {'linear_speed_limit': 0.6}, # [cite: 2] - 응답성 향상을 위해 0.45에서 0.6으로 증가
-            {'angular_speed_limit': 3.0} # [cite: 2] - 회전 응답성 향상을 위해 2.0에서 3.0으로 증가
+            # [2026-05-12] 0.6/3.0 → 0.30/1.5. 측정: 0.6 m/s = nav2 max_vel_x(0.20) 의 3배 → 너무 빠름.
+            #   1.5 rad/s 면 360°/4초 회전. nav2 의 wz_max(0.6) 보다 빠르지만 운영자 직접 조작 시 충분.
+            {'linear_speed_limit': 0.30},
+            {'angular_speed_limit': 1.5}
         ]
     )
 

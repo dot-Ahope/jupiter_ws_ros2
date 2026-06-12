@@ -47,7 +47,13 @@ class JoyTeleop(Node):
         self.get_logger().info(f"Speed limits: linear={self.linear_speed_limit}, angular={self.angular_speed_limit}")
 
         # --- 퍼블리셔 생성 ---
-        self.cmdVelPublisher = self.create_publisher(Twist, '/cmd_vel', 10)
+        # [2026-05-12] /cmd_vel → /cmd_vel_joy 변경.
+        #   twist_mux config (twist_mux.yaml) 의 joy input topic 이 /cmd_vel_joy 로 설정됨 (priority 100).
+        #   이전: /cmd_vel publish → collision_monitor 가 처리 → /cmd_vel_nav_filtered → twist_mux nav (priority 50)
+        #         → 운영자 조작이 nav2 우선순위로 다뤄짐 + collision_monitor 가 polygon 트립 시 cmd 차단
+        #   현재: /cmd_vel_joy publish → twist_mux joy (priority 100, collision_monitor bypass)
+        #         → 운영자 조작 최우선, polygon 영역 안에서도 직접 조작 가능
+        self.cmdVelPublisher = self.create_publisher(Twist, '/cmd_vel_joy', 10)
         self.pub_Adjust = self.create_publisher(Adjust, "/Adjust", 10)
         self.pub_Buzzer = self.create_publisher(Bool, "Buzzer", 1)
         self.pub_JoyState = self.create_publisher(Bool, "JoyState", 10)

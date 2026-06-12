@@ -7,7 +7,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rcl_interfaces.msg import ParameterDescriptor, FloatingPointRange, ParameterType
-from std_msgs.msg import Float32, Float32MultiArray
+from std_msgs.msg import Float32, Float32MultiArray, Int32MultiArray
 from sensor_msgs.msg import Imu
 from geometry_msgs.msg import Twist
 from jupiter_msgs.srv import RobotArm
@@ -98,6 +98,14 @@ class JupiterDriver(Node):
     # 0.06 으로 낮추면 100~150ms 안에 confirm → kick 즉시 종료 → RUNNING 패스스루 진입.
     ROT_KICK_CONFIRM_THRESHOLD = 0.06  # |actual_z| 가 이 값 이상이면 motion 확인 → kick 조기 종료
     ROT_SIGN_HOLD_SEC = 0.25         # 부호 전환 금지 시간
+    # [2026-05-14 옵션 B] cmd |ω| 가 이 값 이상이면 STARTUP_KICK 우회. 직진→회전 transition 시
+    # MCU_ROT_START_ANGULAR=0.30 의 작은 cmd 가 wheel-level 약 0.035 m/s 로 산출되어 M1 의
+    # 정지마찰+deadzone 통과 못 함 → M1 1.5s 이상 stall 관찰 (bag t=311s, BWD→CW).
+    # cmd |ω| ≥ 0.50 이면 RUNNING 즉시 진입 → raw cmd magnitude 그대로 통과 → wheel-level
+    # 0.157 m/s 정도 → M1 deadzone 통과 확률 향상.
+    # PID windup 우려 없음 (incremental form + output saturation). balance correction 도 회전
+    # 모드라 비동작 → 충돌 없음.
+    ROT_BYPASS_KICK_THRESHOLD = 0.50
 
     # [2026-04-30] 이동 + 회전 데드존 보상
     # DWB 가 ω≈0.16 같은 작은 angular 을 내면 wheel-level 명령(left=0.10, right=0.06 m/s)이
@@ -232,6 +240,14 @@ class JupiterDriver(Node):
             '/jupiter/wheel_speeds',
             10
         )
+        # [2026-05-12] Encoder raw count (4 motor) publish — 우측 wheel 변동성 진단용.
+        # data = [M1, M2, M3, M4] int32 누적 count. MCU FUNC_REPORT_ENCODER (0x0D) 송출.
+        # 진단 목적: wheel_speeds (m/s) 만으로 잡히지 않는 raw encoder 의 jitter / 비대칭 측정.
+        self.encoder_pub = self.create_publisher(
+            Int32MultiArray,
+            '/jupiter/encoder_counts',
+            10
+        )
         # 별도의 가속도 변화량 토픽 추가 (움직임 감지용)
         self.accel_delta_pub = self.create_publisher(
             Imu,
@@ -270,6 +286,9 @@ class JupiterDriver(Node):
         self.create_timer(0.02, self.publish_velocity)  # 50Hz (0.02s) - 10Hz에서 증가
         # [2026-05-06] 휠 속도 publish — MCU FUNC_REPORT_WHEEL_SPEED 가 25Hz 라 그에 맞춰 40ms.
         self.create_timer(0.04, self.publish_wheel_speeds)  # 25Hz
+        # [2026-05-12] Encoder raw count publish — wheel_speeds 와 별도. MCU 가 report_count==31
+        #   마다 송신 (약 30Hz). 40ms (25Hz) 주기로 read 충분.
+        self.create_timer(0.04, self.publish_encoder_counts)  # 25Hz
         self.create_timer(5.0, self.check_serial_health)  # 5초마다 시리얼 상태 확인
         self._serial_was_ok = True  # 최초 상태 추적 (로그 중복 방지)
         
@@ -411,8 +430,14 @@ class JupiterDriver(Node):
                                 self._rot_motion_confirmed = True
 
                         if (not self._rot_motion_confirmed) and now < self._rot_startup_until:
-                            # STARTUP 단계: 정지마찰 극복용 키크 유지
-                            angular_corrected = self._rot_sign * self.MCU_ROT_START_ANGULAR
+                            # [옵션 B] STARTUP 중이라도 cmd 가 충분히 크면 즉시 RUNNING 전환
+                            # raw_abs (=|angular_corrected|) >= BYPASS 면 작은 kick 0.30 보다 큰 raw 가 우선.
+                            if raw_abs >= self.ROT_BYPASS_KICK_THRESHOLD:
+                                self._rot_motion_confirmed = True
+                                angular_corrected = req_sign * max(raw_abs, self.ROT_RUNNING_MIN_ANGULAR)
+                            else:
+                                # STARTUP 단계: 정지마찰 극복용 키크 유지
+                                angular_corrected = self._rot_sign * self.MCU_ROT_START_ANGULAR
                         else:
                             # RUNNING 단계:
                             # 정지 회전에서는 0.0526 같은 DWB 최소 샘플이 실제 하드웨어를 못 움직일 수 있다.
@@ -429,8 +454,14 @@ class JupiterDriver(Node):
                         self._rot_sign = req_sign
                         self._rot_sign_hold_until = now + self.ROT_SIGN_HOLD_SEC
                         self._rot_startup_until = now + self.ROT_STARTUP_KICK_SEC
-                        self._rot_motion_confirmed = False
-                        angular_corrected = self._rot_sign * self.MCU_ROT_START_ANGULAR
+                        # [옵션 B] cmd 가 충분히 크면 STARTUP_KICK 우회 → 바로 RUNNING 진입
+                        # 직진→회전 transition 시 M1 정지마찰+deadzone 통과 보장.
+                        if raw_abs >= self.ROT_BYPASS_KICK_THRESHOLD:
+                            self._rot_motion_confirmed = True
+                            angular_corrected = req_sign * max(raw_abs, self.ROT_RUNNING_MIN_ANGULAR)
+                        else:
+                            self._rot_motion_confirmed = False
+                            angular_corrected = self._rot_sign * self.MCU_ROT_START_ANGULAR
                     else:
                         angular_corrected = 0.0
             
@@ -693,6 +724,29 @@ class JupiterDriver(Node):
             msg = Float32MultiArray()
             msg.data = [float(left_mps), float(right_mps)]
             self.wheel_speeds_pub.publish(msg)
+        except Exception:
+            pass
+
+    def publish_encoder_counts(self):
+        """
+        [2026-05-12] 4 motor raw encoder count 를 /jupiter/encoder_counts 로 publish.
+        Int32MultiArray.data = [M1, M2, M3, M4] 누적 count.
+
+        소스: MCU FUNC_REPORT_ENCODER (0x0D). Rosmaster_Lib.get_motor_encoder().
+        주기: ~30Hz (firmware 의 report_count==31 마다 auto report).
+
+        진단 목적:
+          - wheel_speeds (m/s) 만으로 안 잡히는 raw encoder 의 jitter 측정
+          - 4 motor 각각의 회전수 차이 (M2/M4 의 회전 정도 확인)
+          - 동일 cmd 에 대한 motor 별 변동성 (특히 우측 wheel 의 변동)
+
+        Note: count 는 누적값. 측정 시 diff 로 변환 필요.
+        """
+        try:
+            m1, m2, m3, m4 = self.bot.get_motor_encoder()
+            msg = Int32MultiArray()
+            msg.data = [int(m1), int(m2), int(m3), int(m4)]
+            self.encoder_pub.publish(msg)
         except Exception:
             pass
 
